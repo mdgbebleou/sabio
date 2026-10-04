@@ -1,20 +1,47 @@
-import React, { useState } from 'react';
-import { Slot, useRouter } from 'expo-router';
-import ParentLayout from '../../components/ParentLayout';
+import { useEffect, useState } from 'react';
+import { Stack, useRouter, useSegments } from 'expo-router';
+import { supabase } from '../services/supabase';
+import { View, ActivityIndicator } from 'react-native';
 
 export default function RootLayout() {
-  const [activeTab, setActiveTab] = useState<'Home' | 'Academics' | 'Fees' | 'Messages' | 'More'>('Home');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const router = useRouter();
+  const segments = useSegments();
 
-  const handleTabPress = (tab: string) => {
-    setActiveTab(tab as any);
-    if (tab === 'Home') router.push('/');
-    else router.push(`/${tab.toLowerCase()}` as any);
-  };
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsAuthenticated(!!session);
+      setIsLoading(false);
+    });
 
-  return (
-    <ParentLayout activeTab={activeTab} onTabPress={handleTabPress}>
-      <Slot />
-    </ParentLayout>
-  );
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(!!session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    // Check if the current route is login
+    const isLoginPage = segments[0] === 'login';
+
+    if (!isAuthenticated && !isLoginPage) {
+      router.replace('/login');
+    } else if (isAuthenticated && isLoginPage) {
+      router.replace('/parent-dashboard');
+    }
+  }, [isAuthenticated, isLoading, segments]);
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#002b49' }}>
+        <ActivityIndicator size="large" color="#f59e0b" />
+      </View>
+    );
+  }
+
+  return <Stack screenOptions={{ headerShown: false }} />;
 }

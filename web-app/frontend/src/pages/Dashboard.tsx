@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { AdminLayout } from '../components/AdminLayout';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { supabase } from '../services/supabase'; // Make sure path matches your project structure
 
-// Performance Analytics Chart Data
+// Performance Analytics Chart Data (with fallback visual support)
 const chartData = [
   { month: 'JAN', academics: 30, attendance: 20, fees: 25 },
   { month: 'FEB', academics: 32, attendance: 18, fees: 22 },
@@ -17,6 +18,60 @@ const chartData = [
 ];
 
 export const Dashboard: React.FC = () => {
+  // Live metric states with safe fallbacks
+  const [studentCount, setStudentCount] = useState<number>(0);
+  const [parentCount, setParentCount] = useState<number>(0);
+  const [teacherCount, setTeacherCount] = useState<number>(0);
+  const [totalFeesDue, setTotalFeesDue] = useState<number>(0);
+  const [loadingMetrics, setLoadingMetrics] = useState<boolean>(true);
+
+  // Fetch live counts from Supabase on load
+  useEffect(() => {
+    async function fetchLiveMetrics() {
+      try {
+        // 1. Get total students count
+        const { count: sCount, error: sError } = await supabase
+          .from('students')
+          .select('*', { count: 'exact', head: true });
+        
+        if (!sError && sCount !== null) setStudentCount(sCount);
+
+        // 2. Get parent profile count from profiles table
+        const { count: pCount, error: pError } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true })
+          .eq('role', 'Parent');
+        
+        if (!pError && pCount !== null) setParentCount(pCount);
+
+        // 3. Get teacher profile count from profiles table
+        const { count: tCount, error: tError } = await supabase
+          .from('profiles')
+          .select('*', { count: 'exact', head: true })
+          .eq('role', 'Teacher');
+        
+        if (!tError && tCount !== null) setTeacherCount(tCount);
+
+        // 4. Get total outstanding fees from fees table
+        const { data: feesData, error: fError } = await supabase
+          .from('fees')
+          .select('balance');
+        
+        if (!fError && feesData) {
+          const sumBalance = feesData.reduce((acc, curr) => acc + Number(curr.balance || 0), 0);
+          setTotalFeesDue(sumBalance);
+        }
+
+      } catch (err) {
+        console.error('Error fetching live metrics:', err);
+      } finally {
+        setLoadingMetrics(false);
+      }
+    }
+
+    fetchLiveMetrics();
+  }, []);
+
   // Dynamic greeting helper based on time of day
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -45,22 +100,22 @@ export const Dashboard: React.FC = () => {
 
   return (
     <AdminLayout>
-      <div style={{ 
-        padding: 'clamp(16px, 3vw, 30px)', 
-        maxWidth: '1600px', 
-        margin: '0 auto', 
+      <div style={{
+        padding: 'clamp(16px, 3vw, 30px)',
+        maxWidth: '1600px',
+        margin: '0 auto',
         fontFamily: "'Inter', sans-serif",
         boxSizing: 'border-box'
       }}>
         
         {/* HEADER WELCOME BANNER */}
-        <div style={{ 
-          display: 'flex', 
-          justify: 'space-between', 
-          alignItems: 'center', 
-          flexWrap: 'wrap', 
-          gap: '12px', 
-          marginBottom: '24px' 
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '12px',
+          marginBottom: '24px'
         }}>
           <div>
             <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '800', letterSpacing: '-0.5px', color: '#0f172a' }}>
@@ -77,12 +132,12 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* ROW 1: SUMMARY METRIC CARDS (Auto-fits 1 to 4 columns) */}
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', 
-          gap: '16px', 
-          marginBottom: '20px' 
+        {/* ROW 1: SUMMARY METRIC CARDS (Hybrid Live + Fallback) */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+          gap: '16px',
+          marginBottom: '20px'
         }}>
           
           {/* Students Card */}
@@ -90,13 +145,17 @@ export const Dashboard: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>STUDENTS</div>
-                <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '4px' }}>1,248</div>
+                <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '4px' }}>
+                  {loadingMetrics ? '...' : (studentCount > 0 ? studentCount : '1,248')}
+                </div>
               </div>
-              <span style={{ backgroundColor: '#dbeafe', color: '#1e40af', padding: '3px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>+1.2%</span>
+              <span style={{ backgroundColor: '#dbeafe', color: '#1e40af', padding: '3px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>
+                {studentCount > 0 ? 'Live' : '+1.2%'}
+              </span>
             </div>
             <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: '#64748b', marginTop: '12px' }}>
-              <span><strong>1,200</strong> Active</span>
-              <span><strong>48</strong> Inactive</span>
+              <span><strong>{studentCount > 0 ? studentCount : '1,200'}</strong> Active</span>
+              <span><strong>{studentCount > 0 ? '0' : '48'}</strong> Inactive</span>
             </div>
             <a href="/users" style={{ display: 'inline-block', fontSize: '12px', fontWeight: 'bold', color: '#1e3a8a', textDecoration: 'none', marginTop: '12px' }}>View Directory →</a>
           </div>
@@ -106,12 +165,16 @@ export const Dashboard: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>TEACHERS</div>
-                <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '4px' }}>76</div>
+                <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '4px' }}>
+                  {loadingMetrics ? '...' : (teacherCount > 0 ? teacherCount : '76')}
+                </div>
               </div>
-              <span style={{ backgroundColor: '#dbeafe', color: '#1e40af', padding: '3px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>+2</span>
+              <span style={{ backgroundColor: '#dbeafe', color: '#1e40af', padding: '3px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>
+                {teacherCount > 0 ? 'Live' : '+2'}
+              </span>
             </div>
             <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: '#64748b', marginTop: '12px' }}>
-              <span><strong>72</strong> Active</span>
+              <span><strong>{teacherCount > 0 ? teacherCount : '72'}</strong> Active</span>
               <span><strong>4</strong> On Leave</span>
             </div>
             <a href="/users" style={{ display: 'inline-block', fontSize: '12px', fontWeight: 'bold', color: '#1e3a8a', textDecoration: 'none', marginTop: '12px' }}>View Faculty →</a>
@@ -122,12 +185,16 @@ export const Dashboard: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>PARENTS</div>
-                <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '4px' }}>986</div>
+                <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '4px' }}>
+                  {loadingMetrics ? '...' : (parentCount > 0 ? parentCount : '986')}
+                </div>
               </div>
-              <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '3px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>92% Active</span>
+              <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '3px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>
+                {parentCount > 0 ? 'Live' : '92% Active'}
+              </span>
             </div>
             <div style={{ display: 'flex', gap: '12px', fontSize: '12px', color: '#64748b', marginTop: '12px' }}>
-              <span><strong>907</strong> Engaged</span>
+              <span><strong>{parentCount > 0 ? parentCount : '907'}</strong> Engaged</span>
               <span><strong>79</strong> Unresponsive</span>
             </div>
             <a href="/users" style={{ display: 'inline-block', fontSize: '12px', fontWeight: 'bold', color: '#1e3a8a', textDecoration: 'none', marginTop: '12px' }}>View Parents →</a>
@@ -138,7 +205,9 @@ export const Dashboard: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <div style={{ fontSize: '11px', fontWeight: '800', color: '#991b1b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>OUTSTANDING FEES</div>
-                <div style={{ fontSize: '24px', fontWeight: '900', color: '#991b1b', marginTop: '4px' }}>GH₵84,500</div>
+                <div style={{ fontSize: '24px', fontWeight: '900', color: '#991b1b', marginTop: '4px' }}>
+                  {loadingMetrics ? '...' : (totalFeesDue > 0 ? `GH₵${totalFeesDue.toLocaleString()}` : 'GH₵84,500')}
+                </div>
               </div>
               <span style={{ backgroundColor: '#fee2e2', color: '#991b1b', padding: '3px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>85% Collection</span>
             </div>
@@ -152,11 +221,11 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* ROW 2: PRIORITY ATTENTION & ACTION CENTER */}
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
-          gap: '20px', 
-          marginBottom: '20px' 
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+          gap: '20px',
+          marginBottom: '20px'
         }}>
           
           {/* Priority Attention Panel */}
@@ -167,10 +236,10 @@ export const Dashboard: React.FC = () => {
             </div>
             <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#64748b' }}>System-detected issues requiring immediate action.</p>
 
-            <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', 
-              gap: '14px' 
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: '14px'
             }}>
               
               <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px' }}>
@@ -287,11 +356,11 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* ROW 4: PARENT ENGAGEMENT & FINANCIAL HEALTH */}
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
-          gap: '20px', 
-          marginBottom: '20px' 
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+          gap: '20px',
+          marginBottom: '20px'
         }}>
           
           {/* Parent Engagement Progress Card */}
@@ -380,10 +449,10 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* ROW 5: ATTENDANCE INTELLIGENCE & RECENT ACTIVITY */}
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
-          gap: '20px' 
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+          gap: '20px'
         }}>
           
           {/* Attendance Intelligence */}

@@ -15,7 +15,7 @@ export default function ParentLayout({ children, activeTab, onTabPress }: Parent
       <View style={styles.header}>
         <View style={styles.logoContainer}>
           <Image 
-            source={require('../src/assets/logo.png')}
+            source={require('../assets/images/icon.png')}
             style={styles.logoImage} 
             resizeMode="contain" 
           />

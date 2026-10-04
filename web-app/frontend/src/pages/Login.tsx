@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../services/api';
+import { supabase } from '../services/supabase'; // <--- Switched to Supabase client
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -16,46 +16,53 @@ export const Login: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // POST request to Django login
-      const response = await api.post('/api/users/login/', { email, password });
-      const resData = response.data;
+      // 1. Authenticate with Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-      console.log("Django Login Response Payload:", resData);
-
-      // Check for token in various Django REST formats
-      const token = resData.access || resData.token || resData.key || resData.jwt;
-
-      if (token) {
-        // Save token for authenticated requests
-        localStorage.setItem('token', token);
-      } else {
-        // If Django login doesn't return a token, save a session marker so requests proceed
-        console.warn("No token key returned in Django response. Continuing session with user data.");
-        localStorage.setItem('token', 'session-active');
+      if (authError) {
+        throw authError;
       }
 
-      // Store User Info
-      const role = resData.role || resData.user?.role || 'Admin';
-      const userEmail = resData.username || resData.email || email;
-      const firstName = resData.first_name || 'User';
+      const user = authData.user;
+      if (!user) {
+        throw new Error('No user session returned from Supabase.');
+      }
 
+      // Save session token marker
+      localStorage.setItem('token', authData.session?.access_token || 'session-active');
+
+      // 2. Fetch user's role and profile details from your 'profiles' table
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (profileError) {
+        console.warn('Could not fetch profile role, defaulting to Admin:', profileError.message);
+      }
+
+      const role = profileData?.role || user.user_metadata?.role || 'Admin';
+      const userEmail = user.email || email;
+      const firstName = profileData?.first_name || user.user_metadata?.first_name || 'User';
+
+      // Store User Info in localStorage
       localStorage.setItem('user_role', role);
       localStorage.setItem('user_email', userEmail);
       localStorage.setItem('user_first_name', firstName);
 
-      // Navigate to correct page based on Role
+      // 3. Navigate based on Role
       if (role === 'Teacher') navigate('/teacher-dashboard');
       else if (role === 'Accountant') navigate('/finance-dashboard');
       else if (role === 'Parent') navigate('/parent-dashboard');
-      else navigate('/users'); // Admin / Default
+      else navigate('/users'); // Admin / Default Access Management page
 
     } catch (error: any) {
-      console.error("Login Error:", error);
-      if (error.response && error.response.data) {
-        setErrorMessage(error.response.data.detail || error.response.data.error || 'Invalid email or password.');
-      } else {
-        setErrorMessage('Unable to connect to authentication server. Ensure Django is running on port 8000.');
-      }
+      console.log("Login Error:", error);
+      setErrorMessage(error.message || 'Invalid email or password.');
     } finally {
       setIsLoading(false);
     }

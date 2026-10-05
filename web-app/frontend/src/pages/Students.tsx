@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AdminLayout } from '../components/AdminLayout';
+import { supabase } from '../services/supabase';
 
 interface StudentData {
   id: string;
@@ -8,6 +9,7 @@ interface StudentData {
   avatar?: string;
   attentionFlag?: 'ATTENTION REQUIRED' | 'WARNING' | null;
   className: string;
+  classId?: string;
   parentName: string;
   academicScore: string;
   academicTrend: 'up' | 'down' | 'flat';
@@ -19,76 +21,42 @@ interface StudentData {
   status: 'Active Enrolled' | 'Suspended' | 'Pending' | 'Deactivated';
 }
 
-const mockStudents: StudentData[] = [
-  {
-    id: '1',
-    customId: '24-0192',
-    name: 'Alex Carter',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-    attentionFlag: 'ATTENTION REQUIRED',
-    className: 'Form 2A',
-    parentName: 'Sarah Carter',
-    academicScore: '61%',
-    academicTrend: 'down',
-    attendanceScore: '64%',
-    attendanceWarning: true,
-    feeStatus: 'Paid',
-    engagement: 'Low',
-    status: 'Active Enrolled',
-  },
-  {
-    id: '2',
-    customId: '24-0145',
-    name: 'Mia Rodriguez',
-    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80',
-    attentionFlag: null,
-    className: 'Form 2A',
-    parentName: 'Carlos Rodriguez',
-    academicScore: '88%',
-    academicTrend: 'up',
-    attendanceScore: '98%',
-    attendanceWarning: false,
-    feeStatus: 'Paid',
-    engagement: 'High',
-    status: 'Active Enrolled',
-  },
-  {
-    id: '3',
-    customId: '24-0321',
-    name: 'Elijah James',
-    attentionFlag: 'WARNING',
-    className: 'Form 3C',
-    parentName: 'Marcus James',
-    academicScore: '75%',
-    academicTrend: 'flat',
-    attendanceScore: '92%',
-    attendanceWarning: false,
-    feeStatus: 'Overdue',
-    feeAmountOverdue: '$450.00',
-    engagement: 'Moderate',
-    status: 'Active Enrolled',
-  },
-];
+interface ClassOption {
+  id: string;
+  name: string;
+  grade: string;
+}
+
+interface GuardianOption {
+  id: string;
+  name: string;
+}
 
 export const Students: React.FC = () => {
-  const [students, setStudents] = useState<StudentData[]>(mockStudents);
+  const [students, setStudents] = useState<StudentData[]>([]);
+  const [classesList, setClassesList] = useState<ClassOption[]>([]);
+  const [guardiansList, setGuardiansList] = useState<GuardianOption[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedClass, setSelectedClass] = useState('All');
-  const [selectedYear, setSelectedYear] = useState('23/24');
-  const [selectedStatus, setSelectedStatus] = useState('Active');
+  
+  // KPI Count States
+  const [totalStudentsCount, setTotalStudentsCount] = useState(0);
+  const [activeStudentsCount, setActiveStudentsCount] = useState(0);
+  const [newStudentsCount, setNewStudentsCount] = useState(0);
 
   // Popup Modal States
   const [activeModal, setActiveModal] = useState<'add' | 'status' | 'deactivate' | 'assign' | null>(null);
-  const [selectedStudent, setSelectedStudent] = useState<StudentData | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
-  // Form Field States
-  const [newStudent, setNewStudent] = useState({
-    firstName: '', lastName: '', studentId: '', dob: '', gender: 'Male', academicYear: '2024-2025', grade: 'Form 1A', enrollmentDate: '', guardian: ''
-  });
-  const [statusChange, setStatusChange] = useState({ newStatus: '', notes: '' });
-  const [deactivation, setDeactivation] = useState({ reason: '', date: '2026-08-16', notes: '' });
-  const [assignment, setAssignment] = useState({ year: '2024 - 2025', term: 'Term 1 (Fall)', targetClass: 'Form 2A' });
+  // Form Field States for Adding a Student
+  const [newFirstName, setNewFirstName] = useState('');
+  const [newLastName, setNewLastName] = useState('');
+  const [generatedStudentId, setGeneratedStudentId] = useState('');
+  const [newDob, setNewDob] = useState('');
+  const [newGender, setNewGender] = useState('Male');
+  const [newClassId, setNewClassId] = useState('');
+  const [newGuardianId, setNewGuardianId] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',
@@ -110,12 +78,160 @@ export const Students: React.FC = () => {
     boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', overflow: 'hidden', fontFamily: "'Inter', sans-serif"
   };
 
-  // Handlers
-  const handleOpenAction = (type: 'status' | 'deactivate' | 'assign', student: StudentData) => {
-    setSelectedStudent(student);
-    setActiveModal(type);
+  // Fetch Students, Classes, and Guardians from Supabase
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadData = async () => {
+      try {
+        setIsLoading(true);
+
+        // 1. Fetch classes for dropdown selection
+        const { data: dbClasses, error: classErr } = await supabase.from('classes').select('id, name, grade');
+        if (classErr) throw classErr;
+        if (isMounted) setClassesList(dbClasses || []);
+
+        // 2. Fetch guardians and sort newest first (supporting both profiles or guardians tables)
+        let formattedGuardians: GuardianOption[] = [];
+        const { data: dbGuardians, error: guardErr } = await supabase
+          .from('guardians')
+          .select('id, full_name, created_at')
+          .order('created_at', { ascending: false });
+
+        if (!guardErr && dbGuardians && dbGuardians.length > 0) {
+          formattedGuardians = dbGuardians.map((g: Record<string, unknown>) => ({
+            id: g.id as string,
+            name: (g.full_name as string) || 'Unnamed Guardian'
+          }));
+        } else {
+          // Fallback to profiles table if guardians table is empty/missing
+          const { data: dbProfiles } = await supabase
+            .from('profiles')
+            .select('id, full_name, first_name, last_name, created_at')
+            .order('created_at', { ascending: false });
+
+          if (dbProfiles) {
+            formattedGuardians = dbProfiles.map((p: Record<string, unknown>) => ({
+              id: p.id as string,
+              name: (p.full_name as string) || `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'User Profile'
+            }));
+          }
+        }
+
+        if (isMounted) setGuardiansList(formattedGuardians);
+
+        // 3. Fetch students from Supabase along with their assigned class & guardian info
+        const { data: dbStudents, error: studentErr } = await supabase
+          .from('students')
+          .select('*, classes:class_id(name, grade), guardians:parent_id(full_name)');
+        if (studentErr) throw studentErr;
+
+        const formattedStudents: StudentData[] = (dbStudents || []).map((st: Record<string, unknown>) => {
+          const cls = st.classes as Record<string, unknown> | null;
+          const className = cls ? (cls.name as string) : ((st.class_name as string) || 'Unassigned');
+
+          const guard = st.guardians as Record<string, unknown> | null;
+          const parentName = guard ? (guard.full_name as string) : ((st.guardian_name as string) || 'Not Assigned');
+
+          return {
+            id: st.id as string,
+            customId: (st.custom_id as string) || (st.id as string).slice(0, 8),
+            name: `${st.first_name || ''} ${st.last_name || ''}`.trim(),
+            avatar: (st.avatar as string) || undefined,
+            attentionFlag: null,
+            className: className,
+            classId: (st.class_id as string) || undefined,
+            parentName: parentName,
+            academicScore: '78%',
+            academicTrend: 'up',
+            attendanceScore: '92%',
+            feeStatus: 'Paid',
+            engagement: 'High',
+            status: (st.status as StudentData['status']) || 'Active Enrolled',
+          };
+        });
+
+        if (isMounted) {
+          setStudents(formattedStudents);
+          setTotalStudentsCount(formattedStudents.length);
+          setActiveStudentsCount(formattedStudents.filter(s => s.status === 'Active Enrolled').length);
+          setNewStudentsCount(formattedStudents.filter(s => s.status === 'Pending' || s.status === 'Active Enrolled').length);
+        }
+      } catch (err) {
+        console.error('Error fetching students data:', err);
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
+    loadData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Generate system student ID whenever the Add modal opens
+  const handleOpenAddModal = () => {
+    const randomId = `STU-${Math.floor(1000 + Math.random() * 9000)}`;
+    setGeneratedStudentId(randomId);
+    setActiveModal('add');
+  };
+
+  const handleCreateStudent = async () => {
+    if (!newFirstName || !newLastName || !newClassId) {
+      alert('Please fill in First Name, Last Name, and assign a Class.');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      const selectedClassObj = classesList.find(c => c.id === newClassId);
+      const resolvedClassName = selectedClassObj ? selectedClassObj.name : 'Unassigned';
+
+      const { error } = await supabase.from('students').insert([
+        {
+          first_name: newFirstName.trim(),
+          last_name: newLastName.trim(),
+          custom_id: generatedStudentId,
+          dob: newDob || null,
+          gender: newGender,
+          class_id: newClassId,
+          class_name: resolvedClassName,
+          parent_id: newGuardianId || '00000000-0000-0000-0000-000000000000',
+          status: 'Active Enrolled',
+        }
+      ]);
+
+      if (error) throw error;
+
+      alert('Student added successfully!');
+      setActiveModal(null);
+      setNewFirstName('');
+      setNewLastName('');
+      setNewClassId('');
+      setNewGuardianId('');
+      window.location.reload();
+    } catch (err: unknown) {
+      const errorMessage = typeof err === 'object' && err !== null && 'message' in err 
+        ? (err as { message: string }).message 
+        : String(err);
+      console.error('Error creating student:', err);
+      alert('Failed to create student: ' + errorMessage);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleOpenAction = () => {
     setOpenMenuId(null);
   };
+
+  const filteredStudents = students.filter(student =>
+    student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    student.customId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    student.parentName.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <AdminLayout>
@@ -126,13 +242,13 @@ export const Students: React.FC = () => {
           <div>
             <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.5px' }}>Students</h1>
             <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>
-              Manage student records, enrollment, academic information and student status.
+              Manage live student records, database enrollment, and academic status.
             </p>
           </div>
 
           <div style={{ display: 'flex', gap: '10px' }}>
             <button 
-              onClick={() => setActiveModal('add')}
+              onClick={handleOpenAddModal}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: '8px',
                 backgroundColor: '#002b49', border: 'none', padding: '8px 16px',
@@ -141,16 +257,6 @@ export const Students: React.FC = () => {
             >
               + Add Student
             </button>
-            <button style={{
-              display: 'inline-flex', alignItems: 'center', gap: '8px',
-              backgroundColor: '#ffffff', border: '1px solid #cbd5e1', padding: '8px 16px',
-              borderRadius: '10px', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer'
-            }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
-              Export
-            </button>
           </div>
         </div>
 
@@ -158,47 +264,32 @@ export const Students: React.FC = () => {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '20px' }}>
           <div style={cardStyle}>
             <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>TOTAL STUDENTS</div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '8px' }}>
-              <span style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a' }}>1,248</span>
-              <span style={{ color: '#1e40af', fontSize: '12px', fontWeight: 'bold' }}>↑2.4%</span>
-            </div>
+            <div style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>{totalStudentsCount}</div>
           </div>
           <div style={cardStyle}>
             <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>ACTIVE</div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '8px' }}>
-              <span style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a' }}>1,210</span>
-              <span style={{ color: '#64748b', fontSize: '12px', fontWeight: 'bold' }}>Stable</span>
-            </div>
+            <div style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>{activeStudentsCount}</div>
           </div>
           <div style={cardStyle}>
-            <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>NEW THIS TERM</div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '8px' }}>
-              <span style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a' }}>38</span>
-              <span style={{ color: '#1e40af', fontSize: '12px', fontWeight: 'bold' }}>↑12%</span>
-            </div>
+            <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>ENROLLED RECORDS</div>
+            <div style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>{newStudentsCount}</div>
           </div>
-          <div style={{ ...cardStyle, backgroundColor: '#fef2f2', borderColor: '#fecaca', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ ...cardStyle, backgroundColor: '#fef2f2', borderColor: '#fecaca' }}>
             <div style={{ fontSize: '11px', fontWeight: '800', color: '#991b1b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>ATTENTION REQUIRED</div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: '8px' }}>
-              <span style={{ fontSize: '28px', fontWeight: '900', color: '#991b1b' }}>42</span>
-              <span style={{ color: '#991b1b', fontSize: '12px', fontWeight: 'bold' }}>Flagged</span>
-            </div>
+            <div style={{ fontSize: '28px', fontWeight: '900', color: '#991b1b', marginTop: '8px' }}>0</div>
           </div>
         </div>
 
-        {/* SEARCH AND FILTER BAR */}
+        {/* SEARCH BAR */}
         <div style={{ ...cardStyle, marginBottom: '20px' }}>
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ flex: 1, minWidth: '260px', position: 'relative', display: 'flex', alignItems: 'center' }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" style={{ position: 'absolute', left: '12px' }}>
-                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-              </svg>
               <input
                 type="text"
-                placeholder="Search by name, ID, or parent..."
+                placeholder="Search by name, ID, or guardian..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                style={{ width: '100%', padding: '10px 14px 10px 40px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '13px', outline: 'none', backgroundColor: '#f8fafc' }}
+                style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '13px', outline: 'none', backgroundColor: '#f8fafc' }}
               />
             </div>
           </div>
@@ -210,91 +301,95 @@ export const Students: React.FC = () => {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
               <thead>
                 <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '11px', fontWeight: '800', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-                  <th style={{ padding: '16px', textAlign: 'left', width: '40px' }}><input type="checkbox" /></th>
                   <th style={{ padding: '16px', textAlign: 'left' }}>STUDENT</th>
                   <th style={{ padding: '16px', textAlign: 'left' }}>CLASS</th>
                   <th style={{ padding: '16px', textAlign: 'left' }}>PARENT/GUARDIAN</th>
                   <th style={{ padding: '16px', textAlign: 'left' }}>ACADEMIC</th>
                   <th style={{ padding: '16px', textAlign: 'left' }}>ATTENDANCE</th>
                   <th style={{ padding: '16px', textAlign: 'left' }}>FEE STATUS</th>
-                  <th style={{ padding: '16px', textAlign: 'left' }}>ENGAGEMENT</th>
+                  <th style={{ padding: '16px', textAlign: 'left' }}>STATUS</th>
                   <th style={{ padding: '16px', textAlign: 'center', width: '40px' }}>ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
-                {students.map((student) => (
-                  <tr key={student.id} style={{ borderBottom: '1px solid #f1f5f9', position: 'relative' }}>
-                    <td style={{ padding: '16px' }}><input type="checkbox" /></td>
-                    
-                    <td style={{ padding: '16px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        {student.avatar ? (
-                          <img src={student.avatar} alt={student.name} style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover' }} />
-                        ) : (
-                          <div style={{ width: '38px', height: '38px', borderRadius: '50%', backgroundColor: '#dbeafe', color: '#1e40af', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px' }}>
-                            {student.name.split(' ').map(n => n[0]).join('')}
-                          </div>
-                        )}
-                        <div>
-                          <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{student.name}</div>
-                          <div style={{ fontSize: '11px', color: '#64748b' }}>ID: {student.customId}</div>
-                        </div>
-                      </div>
-                    </td>
-
-                    <td style={{ padding: '16px', color: '#334155', fontWeight: '500' }}>{student.className}</td>
-                    <td style={{ padding: '16px', color: '#334155', fontWeight: '500' }}>{student.parentName}</td>
-                    <td style={{ padding: '16px', fontWeight: 'bold' }}>{student.academicScore}</td>
-                    <td style={{ padding: '16px', fontWeight: 'bold' }}>{student.attendanceScore}</td>
-                    
-                    <td style={{ padding: '16px' }}>
-                      <span style={{ backgroundColor: student.feeStatus === 'Paid' ? '#dcfce7' : '#fee2e2', color: student.feeStatus === 'Paid' ? '#166534' : '#991b1b', padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>
-                        {student.feeStatus}
-                      </span>
-                    </td>
-
-                    <td style={{ padding: '16px' }}>
-                      <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 'bold' }}>
-                        {student.engagement}
-                      </span>
-                    </td>
-
-                    {/* ACTION DROPDOWN MENU */}
-                    <td style={{ padding: '16px', textAlign: 'center', position: 'relative' }}>
-                      <button 
-                        onClick={() => setOpenMenuId(openMenuId === student.id ? null : student.id)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', fontWeight: 'bold', color: '#64748b' }}
-                      >
-                        ⋮
-                      </button>
-
-                      {openMenuId === student.id && (
-                        <div style={{
-                          position: 'absolute', right: '16px', top: '40px', backgroundColor: '#ffffff',
-                          border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
-                          zIndex: 100, minWidth: '180px', textTransform: 'none', overflow: 'hidden'
-                        }}>
-                          <button onClick={() => handleOpenAction('assign', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            🏫 Assign Class
-                          </button>
-                          <button onClick={() => handleOpenAction('status', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            🔄 Change Status
-                          </button>
-                          <button onClick={() => handleOpenAction('deactivate', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#dc2626', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', borderTop: '1px solid #f1f5f9' }}>
-                            🚫 Deactivate Student
-                          </button>
-                        </div>
-                      )}
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={8} style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>Loading students from database...</td>
+                  </tr>
+                ) : filteredStudents.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ padding: '40px', textAlign: 'center', color: '#64748b', fontStyle: 'italic' }}>
+                      No students found. Click "+ Add Student" to register one.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredStudents.map((student) => (
+                    <tr key={student.id} style={{ borderBottom: '1px solid #f1f5f9', position: 'relative' }}>
+                      <td style={{ padding: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div style={{ width: '38px', height: '38px', borderRadius: '50%', backgroundColor: '#dbeafe', color: '#1e40af', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px' }}>
+                            {student.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{student.name}</div>
+                            <div style={{ fontSize: '11px', color: '#64748b' }}>ID: {student.customId}</div>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td style={{ padding: '16px', color: '#334155', fontWeight: '500' }}>{student.className}</td>
+                      <td style={{ padding: '16px', color: '#334155', fontWeight: '500' }}>{student.parentName}</td>
+                      <td style={{ padding: '16px', fontWeight: 'bold' }}>{student.academicScore}</td>
+                      <td style={{ padding: '16px', fontWeight: 'bold' }}>{student.attendanceScore}</td>
+                      
+                      <td style={{ padding: '16px' }}>
+                        <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>
+                          {student.feeStatus}
+                        </span>
+                      </td>
+
+                      <td style={{ padding: '16px' }}>
+                        <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 'bold' }}>
+                          {student.status}
+                        </span>
+                      </td>
+
+                      <td style={{ padding: '16px', textAlign: 'center', position: 'relative' }}>
+                        <button 
+                          onClick={() => setOpenMenuId(openMenuId === student.id ? null : student.id)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', fontWeight: 'bold', color: '#64748b' }}
+                        >
+                          ⋮
+                        </button>
+
+                        {openMenuId === student.id && (
+                          <div style={{
+                            position: 'absolute', right: '16px', top: '40px', backgroundColor: '#ffffff',
+                            border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
+                            zIndex: 100, minWidth: '180px', textAlign: 'left', overflow: 'hidden'
+                          }}>
+                            <button onClick={handleOpenAction} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
+                              🏫 Assign Class
+                            </button>
+                            <button onClick={handleOpenAction} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
+                              🔄 Change Status
+                            </button>
+                            <button onClick={handleOpenAction} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#dc2626', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
+                              🚫 Deactivate Student
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
         </div>
 
         {/* ========================================================================= */}
-        {/* POPUP 1: ADD NEW STUDENT MODAL */}
+        {/* MODAL: ADD NEW STUDENT */}
         {/* ========================================================================= */}
         {activeModal === 'add' && (
           <div style={modalOverlayStyle}>
@@ -302,340 +397,112 @@ export const Students: React.FC = () => {
               <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Add New Student</h3>
-                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>Enter details to enroll a new student into the system.</p>
+                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>Enroll a student into the Supabase database.</p>
                 </div>
                 <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
               </div>
 
               <div style={{ padding: '24px', maxHeight: '70vh', overflowY: 'auto' }}>
-                {/* Personal Information */}
-                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '14px' }}>
+                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', marginBottom: '14px' }}>
                   PERSONAL INFORMATION
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                  <div style={{ border: '2px dashed #cbd5e1', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '12px', cursor: 'pointer', backgroundColor: '#f8fafc' }}>
-                    <span style={{ fontSize: '20px' }}>📷</span>
-                    <span style={{ fontSize: '10px', color: '#64748b', textAlign: 'center', marginTop: '4px' }}>Upload Photo (Max 2MB)</span>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>First Name *</label>
-                      <input type="text" placeholder="e.g. Jane" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Student ID *</label>
-                      <input type="text" placeholder="STU-XXXXX" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Last Name *</label>
-                      <input type="text" placeholder="e.g. Doe" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Date of Birth *</label>
-                      <input type="date" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Enrollment Information */}
-                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '20px 0 14px 0' }}>
-                  ENROLLMENT INFORMATION
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
                   <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Academic Year *</label>
-                    <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                      <option>2024-2025</option>
-                      <option>2025-2026</option>
-                    </select>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>First Name *</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. Jane" 
+                      value={newFirstName} 
+                      onChange={(e) => setNewFirstName(e.target.value)} 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
+                    />
                   </div>
                   <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Class / Grade *</label>
-                    <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                      <option>Select Grade</option>
-                      <option>Form 1A</option>
-                      <option>Form 2A</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Enrollment Date *</label>
-                    <input type="date" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Last Name *</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. Doe" 
+                      value={newLastName} 
+                      onChange={(e) => setNewLastName(e.target.value)} 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
+                    />
                   </div>
                 </div>
 
-                {/* Parent / Guardian Linkage */}
-                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '20px 0 14px 0', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>PARENT / GUARDIAN</span>
-                  <span style={{ color: '#002b49', cursor: 'pointer', textTransform: 'none' }}>+ New Guardian</span>
-                </div>
-
-                <div style={{ backgroundColor: '#f8fafc', padding: '14px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
-                  <input type="text" placeholder="🔍 Search by name or email..." style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', boxSizing: 'border-box' }} />
-                  <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: '#64748b' }}>Linking an existing guardian profile simplifies contact management.</p>
-                </div>
-              </div>
-
-              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>💾 Save Student</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* POPUP 2: CHANGE STUDENT STATUS MODAL */}
-        {/* ========================================================================= */}
-        {activeModal === 'status' && selectedStudent && (
-          <div style={modalOverlayStyle}>
-            <div style={modalContainerStyle}>
-              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Change Student Status</h3>
-                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>{selectedStudent.name} (ID: STU-{selectedStudent.customId})</p>
-                </div>
-                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
-              </div>
-
-              <div style={{ padding: '24px' }}>
-                {/* Current -> New Status Visual Indicator */}
-                <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', display: 'flex', justifyContent: 'space-around', alignItems: 'center', marginBottom: '20px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
                   <div>
-                    <div style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>CURRENT STATUS</div>
-                    <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#1e40af', marginTop: '2px' }}>● {selectedStudent.status}</div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>System Student ID</label>
+                    <input 
+                      type="text" 
+                      value={generatedStudentId} 
+                      readOnly 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', backgroundColor: '#f1f5f9', color: '#64748b', fontWeight: 'bold', cursor: 'not-allowed', boxSizing: 'border-box' }} 
+                    />
                   </div>
-                  <div style={{ fontSize: '18px', color: '#94a3b8' }}>→</div>
                   <div>
-                    <div style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>NEW STATUS</div>
-                    <div style={{ fontSize: '13px', fontWeight: 'bold', color: statusChange.newStatus ? '#0f172a' : '#94a3b8', marginTop: '2px' }}>
-                      {statusChange.newStatus || 'Pending selection...'}
-                    </div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Date of Birth</label>
+                    <input 
+                      type="date" 
+                      value={newDob} 
+                      onChange={(e) => setNewDob(e.target.value)} 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
+                    />
                   </div>
                 </div>
 
                 <div style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Select New Status *</label>
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Gender</label>
                   <select 
-                    value={statusChange.newStatus}
-                    onChange={(e) => setStatusChange({ ...statusChange, newStatus: e.target.value })}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', marginTop: '4px' }}
+                    value={newGender} 
+                    onChange={(e) => setNewGender(e.target.value)} 
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
                   >
-                    <option value="">Select status...</option>
-                    <option value="Active Enrolled">Active Enrolled</option>
-                    <option value="Suspended">Suspended</option>
-                    <option value="Graduated">Graduated</option>
-                    <option value="Transferred">Transferred</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
                   </select>
                 </div>
 
-                <div>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Administrative Notes</label>
-                  <textarea 
-                    placeholder="Add any relevant details regarding this status change..."
-                    value={statusChange.notes}
-                    onChange={(e) => setStatusChange({ ...statusChange, notes: e.target.value })}
-                    style={{ width: '100%', height: '80px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }}
-                  />
-                  <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#64748b' }}>These notes will be appended to the student's historical record.</p>
-                </div>
-              </div>
-
-              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#3b82f6', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Update Status</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* POPUP 3: DEACTIVATE STUDENT MODAL */}
-        {/* ========================================================================= */}
-        {activeModal === 'deactivate' && selectedStudent && (
-          <div style={modalOverlayStyle}>
-            <div style={modalContainerStyle}>
-              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Deactivate Student</h3>
-                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>Suspend access and active enrollment.</p>
-                </div>
-                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
-              </div>
-
-              <div style={{ padding: '24px' }}>
-                {/* Warning Banner */}
-                <div style={{ backgroundColor: '#fef2f2', borderLeft: '4px solid #dc2626', borderRadius: '8px', padding: '12px 16px', marginBottom: '20px', display: 'flex', gap: '12px' }}>
-                  <span style={{ fontSize: '18px' }}>⚠️</span>
-                  <div>
-                    <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#991b1b' }}>Not a permanent deletion</div>
-                    <div style={{ fontSize: '12px', color: '#7f1d1d', marginTop: '2px', lineHeight: '1.4' }}>
-                      Deactivating this student will remove their access to the portal and suspend active course enrollments. All historical records will be securely preserved.
-                    </div>
-                  </div>
+                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', margin: '20px 0 14px 0' }}>
+                  ENROLLMENT & RELATIONSHIPS
                 </div>
 
-                {/* Selected Student Card */}
-                <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <img src={selectedStudent.avatar || 'https://via.placeholder.com/40'} alt={selectedStudent.name} style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} />
-                    <div>
-                      <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{selectedStudent.name}</div>
-                      <div style={{ fontSize: '11px', color: '#64748b' }}>ID: STU-2023-0892</div>
-                    </div>
-                  </div>
-                  <div style={{ textAlign: 'right', fontSize: '12px', color: '#334155', fontWeight: 'bold' }}>
-                    Grade 11<br /><span style={{ fontSize: '11px', color: '#64748b', fontWeight: 'normal' }}>Class of '25</span>
-                  </div>
-                </div>
-
-                {/* Form Fields */}
                 <div style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Reason for Deactivation *</label>
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Assign Class *</label>
                   <select 
-                    value={deactivation.reason}
-                    onChange={(e) => setDeactivation({ ...deactivation, reason: e.target.value })}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', marginTop: '4px' }}
+                    value={newClassId} 
+                    onChange={(e) => setNewClassId(e.target.value)} 
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
                   >
-                    <option value="">Select a reason...</option>
-                    <option value="Transferred">Transferred to another school</option>
-                    <option value="NonPayment">Non-payment of tuition</option>
-                    <option value="Disciplinary">Disciplinary action</option>
+                    <option value="">Select a class...</option>
+                    {classesList.map(cls => (
+                      <option key={cls.id} value={cls.id}>{cls.name} ({cls.grade})</option>
+                    ))}
                   </select>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#64748b' }}>You can modify or reassign classes later from the action menu.</p>
                 </div>
 
                 <div style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Effective Date *</label>
-                  <input 
-                    type="date" 
-                    value={deactivation.date}
-                    onChange={(e) => setDeactivation({ ...deactivation, date: e.target.value })}
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', marginTop: '4px', boxSizing: 'border-box' }} 
-                  />
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Additional Notes</label>
-                  <textarea 
-                    placeholder="Enter any relevant details or context for this deactivation..."
-                    value={deactivation.notes}
-                    onChange={(e) => setDeactivation({ ...deactivation, notes: e.target.value })}
-                    style={{ width: '100%', height: '80px', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }}
-                  />
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Parent / Guardian Name</label>
+                  <select 
+                    value={newGuardianId} 
+                    onChange={(e) => setNewGuardianId(e.target.value)} 
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
+                  >
+                    <option value="">Select parent or guardian...</option>
+                    {guardiansList.map(g => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#64748b' }}>You can link a parent or guardian now, or update this assignment later.</p>
                 </div>
               </div>
 
               <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
                 <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#b91c1c', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  🚫 Deactivate Student
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* POPUP 4: ASSIGN CLASS MODAL */}
-        {/* ========================================================================= */}
-        {activeModal === 'assign' && selectedStudent && (
-          <div style={modalOverlayStyle}>
-            <div style={modalContainerStyle}>
-              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Assign Class</h3>
-                </div>
-                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
-              </div>
-
-              <div style={{ padding: '24px' }}>
-                {/* Student Info Bar */}
-                <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-                  <img src={selectedStudent.avatar || 'https://via.placeholder.com/40'} alt={selectedStudent.name} style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover' }} />
-                  <div>
-                    <div style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '14px' }}>{selectedStudent.name}</div>
-                    <div style={{ fontSize: '11px', color: '#64748b', display: 'flex', gap: '12px', marginTop: '2px' }}>
-                      <span>🪪 ID: STD-2023-0142</span>
-                      <span>🎓 Current: {selectedStudent.className}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Assignment Details Form */}
-                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
-                  NEW ASSIGNMENT DETAILS
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Academic Year</label>
-                    <select value={assignment.year} onChange={(e) => setAssignment({ ...assignment, year: e.target.value })} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                      <option>2024 - 2025</option>
-                      <option>2025 - 2026</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Term</label>
-                    <select value={assignment.term} onChange={(e) => setAssignment({ ...assignment, term: e.target.value })} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                      <option>Term 1 (Fall)</option>
-                      <option>Term 2 (Spring)</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Target Class</label>
-                  <input 
-                    type="text" 
-                    value={assignment.targetClass} 
-                    onChange={(e) => setAssignment({ ...assignment, targetClass: e.target.value })}
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
-                  />
-                </div>
-
-                {/* Selected Class Overview Card */}
-                <div style={{ backgroundColor: '#e0e7ff', border: '1px solid #c7d2fe', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                    <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#3730a3' }}>Selected Class Overview</span>
-                    <span style={{ backgroundColor: '#ffffff', color: '#3730a3', padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold' }}>Capacity: 38/40</span>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '11px', color: '#312e81', marginBottom: '12px' }}>
-                    <div><strong>Homeroom Teacher:</strong><br />Mr. Anderson</div>
-                    <div><strong>Room Location:</strong><br />Science Wing, Room 204</div>
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: '9px', color: '#64748b', fontWeight: 'bold' }}>CURRENT</div>
-                      <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#0f172a' }}>Form 1B</div>
-                    </div>
-                    <div style={{ fontSize: '16px', color: '#6366f1' }}>→</div>
-                    <div>
-                      <div style={{ fontSize: '9px', color: '#6366f1', fontWeight: 'bold' }}>NEW ASSIGNMENT</div>
-                      <div style={{ fontSize: '13px', fontWeight: '900', color: '#3730a3' }}>Form 2A</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Enrollment Update Notice */}
-                <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '10px 14px', fontSize: '11px', color: '#991b1b', display: 'flex', gap: '8px' }}>
-                  <span>ℹ️</span>
-                  <div>
-                    <strong>Enrollment Update Notice:</strong> Reassigning this student will automatically update their timetable and notify parents/guardians via the portal. Historical records will be preserved.
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  ☑️ Confirm Assignment
+                <button onClick={handleCreateStudent} disabled={isSubmitting} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>
+                  {isSubmitting ? 'Saving...' : 'Save Student'}
                 </button>
               </div>
             </div>

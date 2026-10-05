@@ -2,10 +2,12 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import ParentLayout from '../../components/ParentLayout';
 import { useRouter } from 'expo-router';
+import { useTheme } from '@/hooks/use-theme';
 
 export default function ParentDashboard() {
   const [activeTab, setActiveTab] = useState<'Home' | 'Academics' | 'Fees' | 'Messages' | 'More'>('Home');
   const router = useRouter();
+  const theme = useTheme();
 
   const handleTabPress = (tab: string) => {
     setActiveTab(tab as any);
@@ -23,8 +25,8 @@ export default function ParentDashboard() {
   return (
     <ParentLayout activeTab={activeTab} onTabPress={handleTabPress}>
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.welcomeText}>Welcome, Parent</Text>
-        <Text style={styles.subText}>Here is an overview of your child's school activities.</Text>
+        <Text style={[styles.welcomeText, { color: theme.text }]}>Welcome, Parent</Text>
+        <Text style={[styles.subText, { color: theme.textSecondary }]}>Here is an overview of your child's school activities.</Text>
       </ScrollView>
     </ParentLayout>
   );
@@ -37,11 +39,9 @@ const styles = StyleSheet.create({
   welcomeText: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#0f172a',
     marginBottom: 8,
   },
   subText: {
     fontSize: 14,
-    color: '#64748b',
   },
 });

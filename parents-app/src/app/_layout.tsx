@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { supabase } from '../services/supabase';
 import { View, ActivityIndicator } from 'react-native';
+import { ThemeProvider } from '../context/ThemeContext';
 
 export default function RootLayout() {
   const [isLoading, setIsLoading] = useState(true);
@@ -29,9 +30,9 @@ export default function RootLayout() {
     const isLoginPage = segments[0] === 'login';
 
     if (!isAuthenticated && !isLoginPage) {
-      router.replace('/login');
+      router.replace('/login' as any);
     } else if (isAuthenticated && isLoginPage) {
-      router.replace('/parent-dashboard');
+      router.replace('/parent-dashboard' as any);
     }
   }, [isAuthenticated, isLoading, segments]);
 
@@ -43,5 +44,9 @@ export default function RootLayout() {
     );
   }
 
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <ThemeProvider>
+      <Stack screenOptions={{ headerShown: false }} />
+    </ThemeProvider>
+  );
 }

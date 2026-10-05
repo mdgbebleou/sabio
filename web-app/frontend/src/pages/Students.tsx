@@ -11,6 +11,7 @@ interface StudentData {
   className: string;
   classId?: string;
   parentName: string;
+  parentId?: string;
   academicScore: string;
   academicTrend: 'up' | 'down' | 'flat';
   attendanceScore: string;
@@ -45,8 +46,14 @@ export const Students: React.FC = () => {
   const [newStudentsCount, setNewStudentsCount] = useState(0);
 
   // Popup Modal States
-  const [activeModal, setActiveModal] = useState<'add' | 'status' | 'deactivate' | 'assign' | null>(null);
+  const [activeModal, setActiveModal] = useState<'add' | 'status' | 'deactivate' | 'assign' | 'link' | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<StudentData | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+
+  // Action Form States
+  const [targetClassId, setTargetClassId] = useState('');
+  const [targetStatus, setTargetStatus] = useState<StudentData['status']>('Active Enrolled');
+  const [targetGuardianId, setTargetGuardianId] = useState('');
 
   // Form Field States for Adding a Student
   const [newFirstName, setNewFirstName] = useState('');
@@ -78,7 +85,7 @@ export const Students: React.FC = () => {
     boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', overflow: 'hidden', fontFamily: "'Inter', sans-serif"
   };
 
-  // Fetch Students, Classes, and Guardians from Supabase
+  // Fetch Students, Classes, and Guardians from Supabase with Newest-First Ordering
   useEffect(() => {
     let isMounted = true;
 
@@ -86,52 +93,47 @@ export const Students: React.FC = () => {
       try {
         setIsLoading(true);
 
-        // 1. Fetch classes for dropdown selection
         const { data: dbClasses, error: classErr } = await supabase.from('classes').select('id, name, grade');
         if (classErr) throw classErr;
         if (isMounted) setClassesList(dbClasses || []);
 
-        // 2. Fetch guardians and sort newest first (supporting both profiles or guardians tables)
         let formattedGuardians: GuardianOption[] = [];
-        const { data: dbGuardians, error: guardErr } = await supabase
-          .from('guardians')
-          .select('id, full_name, created_at')
+        const { data: dbProfiles } = await supabase
+          .from('profiles')
+          .select('id, full_name, first_name, last_name, role, created_at')
+          .ilike('role', 'parent') // Ensures only parents show up in the dropdown
           .order('created_at', { ascending: false });
 
-        if (!guardErr && dbGuardians && dbGuardians.length > 0) {
-          formattedGuardians = dbGuardians.map((g: Record<string, unknown>) => ({
-            id: g.id as string,
-            name: (g.full_name as string) || 'Unnamed Guardian'
+        if (dbProfiles) {
+          formattedGuardians = dbProfiles.map((p: Record<string, unknown>) => ({
+            id: p.id as string,
+            name: (p.full_name as string) || `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'Parent Profile'
           }));
-        } else {
-          // Fallback to profiles table if guardians table is empty/missing
-          const { data: dbProfiles } = await supabase
-            .from('profiles')
-            .select('id, full_name, first_name, last_name, created_at')
-            .order('created_at', { ascending: false });
-
-          if (dbProfiles) {
-            formattedGuardians = dbProfiles.map((p: Record<string, unknown>) => ({
-              id: p.id as string,
-              name: (p.full_name as string) || `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'User Profile'
-            }));
-          }
         }
 
         if (isMounted) setGuardiansList(formattedGuardians);
 
-        // 3. Fetch students from Supabase along with their assigned class & guardian info
         const { data: dbStudents, error: studentErr } = await supabase
           .from('students')
-          .select('*, classes:class_id(name, grade), guardians:parent_id(full_name)');
+          .select(`
+            *,
+            classes:class_id(id, name, grade),
+            profiles:parent_id(id, full_name, first_name, last_name)
+          `)
+          .order('created_at', { ascending: false });
+
         if (studentErr) throw studentErr;
 
         const formattedStudents: StudentData[] = (dbStudents || []).map((st: Record<string, unknown>) => {
           const cls = st.classes as Record<string, unknown> | null;
           const className = cls ? (cls.name as string) : ((st.class_name as string) || 'Unassigned');
+          const classId = cls ? (cls.id as string) : ((st.class_id as string) || undefined);
 
-          const guard = st.guardians as Record<string, unknown> | null;
-          const parentName = guard ? (guard.full_name as string) : ((st.guardian_name as string) || 'Not Assigned');
+          const profileObj = st.profiles as Record<string, unknown> | null;
+          const parentName = profileObj 
+            ? ((profileObj.full_name as string) || `${profileObj.first_name || ''} ${profileObj.last_name || ''}`.trim()) 
+            : ((st.guardian_name as string) || 'Not Assigned');
+          const parentId = profileObj ? (profileObj.id as string) : ((st.parent_id as string) || undefined);
 
           return {
             id: st.id as string,
@@ -140,8 +142,9 @@ export const Students: React.FC = () => {
             avatar: (st.avatar as string) || undefined,
             attentionFlag: null,
             className: className,
-            classId: (st.class_id as string) || undefined,
-            parentName: parentName,
+            classId: classId,
+            parentName: parentName || 'Not Assigned',
+            parentId: parentId,
             academicScore: '78%',
             academicTrend: 'up',
             attendanceScore: '92%',
@@ -171,7 +174,6 @@ export const Students: React.FC = () => {
     };
   }, []);
 
-  // Generate system student ID whenever the Add modal opens
   const handleOpenAddModal = () => {
     const randomId = `STU-${Math.floor(1000 + Math.random() * 9000)}`;
     setGeneratedStudentId(randomId);
@@ -198,7 +200,7 @@ export const Students: React.FC = () => {
           gender: newGender,
           class_id: newClassId,
           class_name: resolvedClassName,
-          parent_id: newGuardianId || '00000000-0000-0000-0000-000000000000',
+          parent_id: newGuardianId || null,
           status: 'Active Enrolled',
         }
       ]);
@@ -223,8 +225,76 @@ export const Students: React.FC = () => {
     }
   };
 
-  const handleOpenAction = () => {
+  // Action Handlers
+  const handleOpenActionModal = (type: 'assign' | 'status' | 'deactivate' | 'link', student: StudentData) => {
+    setSelectedStudent(student);
     setOpenMenuId(null);
+    if (type === 'assign') setTargetClassId(student.classId || '');
+    if (type === 'status') setTargetStatus(student.status);
+    if (type === 'link') setTargetGuardianId(student.parentId || '');
+    setActiveModal(type);
+  };
+
+  const executeAssignClass = async () => {
+    if (!selectedStudent || !targetClassId) return;
+    try {
+      const selectedClassObj = classesList.find(c => c.id === targetClassId);
+      const { error } = await supabase.from('students').update({
+        class_id: targetClassId,
+        class_name: selectedClassObj ? selectedClassObj.name : 'Unassigned'
+      }).eq('id', selectedStudent.id);
+
+      if (error) throw error;
+      alert('Class updated successfully!');
+      window.location.reload();
+    } catch (err) {
+      alert('Error updating class: ' + String(err));
+    }
+  };
+
+  const executeChangeStatus = async () => {
+    if (!selectedStudent) return;
+    try {
+      const { error } = await supabase.from('students').update({
+        status: targetStatus
+      }).eq('id', selectedStudent.id);
+
+      if (error) throw error;
+      alert('Student status updated successfully!');
+      window.location.reload();
+    } catch (err) {
+      alert('Error updating status: ' + String(err));
+    }
+  };
+
+  const executeDeactivate = async () => {
+    if (!selectedStudent) return;
+    try {
+      const { error } = await supabase.from('students').update({
+        status: 'Deactivated'
+      }).eq('id', selectedStudent.id);
+
+      if (error) throw error;
+      alert('Student deactivated successfully!');
+      window.location.reload();
+    } catch (err) {
+      alert('Error deactivating student: ' + String(err));
+    }
+  };
+
+  const executeLinkParent = async () => {
+    if (!selectedStudent) return;
+    try {
+      const { error } = await supabase.from('students').update({
+        parent_id: targetGuardianId || null
+      }).eq('id', selectedStudent.id);
+
+      if (error) throw error;
+      alert('Parent/Guardian linked successfully!');
+      window.location.reload();
+    } catch (err) {
+      alert('Error linking parent: ' + String(err));
+    }
   };
 
   const filteredStudents = students.filter(student =>
@@ -368,14 +438,17 @@ export const Students: React.FC = () => {
                             border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
                             zIndex: 100, minWidth: '180px', textAlign: 'left', overflow: 'hidden'
                           }}>
-                            <button onClick={handleOpenAction} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
-                              🏫 Assign Class
+                            <button onClick={() => handleOpenActionModal('assign', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
+                              Assign Class
                             </button>
-                            <button onClick={handleOpenAction} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
-                              🔄 Change Status
+                            <button onClick={() => handleOpenActionModal('link', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
+                              Link Student to Parent
                             </button>
-                            <button onClick={handleOpenAction} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#dc2626', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
-                              🚫 Deactivate Student
+                            <button onClick={() => handleOpenActionModal('status', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
+                              Change Status
+                            </button>
+                            <button onClick={() => handleOpenActionModal('deactivate', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#dc2626', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
+                              Deactivate Student
                             </button>
                           </div>
                         )}
@@ -480,7 +553,6 @@ export const Students: React.FC = () => {
                       <option key={cls.id} value={cls.id}>{cls.name} ({cls.grade})</option>
                     ))}
                   </select>
-                  <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#64748b' }}>You can modify or reassign classes later from the action menu.</p>
                 </div>
 
                 <div style={{ marginBottom: '16px' }}>
@@ -495,7 +567,6 @@ export const Students: React.FC = () => {
                       <option key={g.id} value={g.id}>{g.name}</option>
                     ))}
                   </select>
-                  <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#64748b' }}>You can link a parent or guardian now, or update this assignment later.</p>
                 </div>
               </div>
 
@@ -504,6 +575,122 @@ export const Students: React.FC = () => {
                 <button onClick={handleCreateStudent} disabled={isSubmitting} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>
                   {isSubmitting ? 'Saving...' : 'Save Student'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: ASSIGN CLASS */}
+        {/* ========================================================================= */}
+        {activeModal === 'assign' && selectedStudent && (
+          <div style={modalOverlayStyle}>
+            <div style={modalContainerStyle}>
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Assign Class for {selectedStudent.name}</h3>
+                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
+              </div>
+              <div style={{ padding: '24px' }}>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '6px' }}>Select Target Class</label>
+                <select 
+                  value={targetClassId} 
+                  onChange={(e) => setTargetClassId(e.target.value)} 
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px' }}
+                >
+                  <option value="">Select a class...</option>
+                  {classesList.map(cls => (
+                    <option key={cls.id} value={cls.id}>{cls.name} ({cls.grade})</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={executeAssignClass} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Update Class</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: LINK STUDENT TO PARENT */}
+        {/* ========================================================================= */}
+        {activeModal === 'link' && selectedStudent && (
+          <div style={modalOverlayStyle}>
+            <div style={modalContainerStyle}>
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Link Parent/Guardian for {selectedStudent.name}</h3>
+                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
+              </div>
+              <div style={{ padding: '24px' }}>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '6px' }}>Select Parent or Guardian</label>
+                <select 
+                  value={targetGuardianId} 
+                  onChange={(e) => setTargetGuardianId(e.target.value)} 
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px' }}
+                >
+                  <option value="">No parent linked</option>
+                  {guardiansList.map(g => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={executeLinkParent} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Save Link</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: CHANGE STATUS */}
+        {/* ========================================================================= */}
+        {activeModal === 'status' && selectedStudent && (
+          <div style={modalOverlayStyle}>
+            <div style={modalContainerStyle}>
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Change Status for {selectedStudent.name}</h3>
+                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
+              </div>
+              <div style={{ padding: '24px' }}>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '6px' }}>Select Enrollment Status</label>
+                <select 
+                  value={targetStatus} 
+                  onChange={(e) => setTargetStatus(e.target.value as StudentData['status'])} 
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px' }}
+                >
+                  <option value="Active Enrolled">Active Enrolled</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Suspended">Suspended</option>
+                  <option value="Deactivated">Deactivated</option>
+                </select>
+              </div>
+              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={executeChangeStatus} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Update Status</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: DEACTIVATE STUDENT */}
+        {/* ========================================================================= */}
+        {activeModal === 'deactivate' && selectedStudent && (
+          <div style={modalOverlayStyle}>
+            <div style={modalContainerStyle}>
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#dc2626' }}>Deactivate Student</h3>
+                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
+              </div>
+              <div style={{ padding: '24px' }}>
+                <p style={{ fontSize: '13px', color: '#334155', lineHeight: '1.5', margin: 0 }}>
+                  Are you sure you want to deactivate <strong>{selectedStudent.name}</strong>? This will restrict portal access and enrollment status across the system.
+                </p>
+              </div>
+              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={executeDeactivate} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#dc2626', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Confirm Deactivation</button>
               </div>
             </div>
           </div>

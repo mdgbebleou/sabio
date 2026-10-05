@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AdminLayout } from '../components/AdminLayout';
 import { supabase } from '../services/supabase';
+import { AddUserModal } from '../components/AddUserModal'; // Reusing your shared Add User modal
 
 interface LinkedStudent {
   name: string;
@@ -41,21 +42,13 @@ export const Parents: React.FC = () => {
   const [attentionCount, setAttentionCount] = useState(0);
 
   // Modal Control States
-  const [activeModal, setActiveModal] = useState<'add' | 'link' | 'reset' | 'deactivate' | null>(null);
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [activeModal, setActiveModal] = useState<'link' | 'reset' | 'deactivate' | null>(null);
   const [selectedParent, setSelectedParent] = useState<ParentData | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
-  // Form Input States matching your modal
-  const [newFirstName, setNewFirstName] = useState('');
-  const [newMiddleName, setNewMiddleName] = useState('');
-  const [newLastName, setNewLastName] = useState('');
-  const [generatedParentId, setGeneratedParentId] = useState('');
-  const [newRelationship, setNewRelationship] = useState('Mother');
-  const [newPrimaryPhone, setNewPrimaryPhone] = useState('');
-  const [newAltPhone, setNewAltPhone] = useState('');
-  const [newEmail, setNewEmail] = useState('');
-  const [newAddress, setNewAddress] = useState('');
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  // Link Student Modal State
+  const [selectedStudentToLink, setSelectedStudentToLink] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const cardStyle: React.CSSProperties = {
@@ -74,157 +67,143 @@ export const Parents: React.FC = () => {
   };
 
   const modalContainerStyle: React.CSSProperties = {
-    backgroundColor: '#ffffff', borderRadius: '20px', width: '100%', maxWidth: '680px',
+    backgroundColor: '#ffffff', borderRadius: '20px', width: '100%', maxWidth: '620px',
     boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', overflow: 'hidden', fontFamily: "'Inter', sans-serif"
   };
 
-  // Fetch Parents (profiles with role='parent') and Students sorted newest first
-  useEffect(() => {
+  // Fetch Parents (profiles with role='parent'), their linked students, and student dropdown list sorted newest first
+  const loadData = async () => {
     let isMounted = true;
+    try {
+      setIsLoading(true);
 
-    const loadData = async () => {
-      try {
-        setIsLoading(true);
+      // 1. Fetch Students for linking dropdown
+      const { data: dbStudents } = await supabase
+        .from('students')
+        .select('id, first_name, last_name, custom_id, class_name')
+        .order('created_at', { ascending: false });
 
-        // 1. Fetch Students sorted newest first
-        const { data: dbStudents } = await supabase
-          .from('students')
-          .select('id, first_name, last_name, custom_id, class_name')
-          .order('created_at', { ascending: false });
+      if (dbStudents && isMounted) {
+        setStudentsList(dbStudents.map((s: Record<string, unknown>) => ({
+          id: s.id as string,
+          name: `${s.first_name || ''} ${s.last_name || ''}`.trim(),
+          className: (s.class_name as string) || 'Unassigned',
+          customId: (s.custom_id as string) || ''
+        })));
+      }
 
-        if (dbStudents && isMounted) {
-          setStudentsList(dbStudents.map((s: Record<string, unknown>) => ({
-            id: s.id as string,
-            name: `${s.first_name || ''} ${s.last_name || ''}`.trim(),
-            className: (s.class_name as string) || 'Unassigned',
-            customId: (s.custom_id as string) || ''
-          })));
-        }
+      // 2. Fetch Parent Profiles and join their linked wards from students table
+      const { data: dbParents, error: parentErr } = await supabase
+        .from('profiles')
+        .select(`
+          *,
+          students:students(first_name, last_name, class_name)
+        `)
+        .eq('role', 'parent')
+        .order('created_at', { ascending: false });
 
-        // 2. Fetch Parent Profiles sorted newest first (ascending: false)
-        const { data: dbParents, error: parentErr } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('role', 'parent')
-          .order('created_at', { ascending: false });
+      if (parentErr) throw parentErr;
 
-        if (parentErr) throw parentErr;
+      const formattedParents: ParentData[] = (dbParents || []).map((p: Record<string, unknown>) => {
+        const rawStudents = (p.students as Array<Record<string, unknown>>) || [];
+        const linkedWards: LinkedStudent[] = rawStudents.map(st => ({
+          name: `${st.first_name || ''} ${st.last_name || ''}`.trim(),
+          className: (st.class_name as string) || 'Unassigned'
+        }));
 
-        const formattedParents: ParentData[] = (dbParents || []).map((p: Record<string, unknown>) => ({
+        return {
           id: p.id as string,
           customId: (p.custom_id as string) || 'PRN-24-0000',
           name: `${p.first_name || ''} ${p.last_name || ''}`.trim() || (p.full_name as string) || 'Unnamed Parent',
           email: (p.email as string) || '',
           phone: (p.primary_phone as string) || (p.phone as string) || '',
           avatarUrl: (p.avatar_url as string) || undefined,
-          linkedStudents: [],
+          linkedStudents: linkedWards,
           engagement: (p.engagement as ParentData['engagement']) || 'Moderate',
           lastActive: p.updated_at ? new Date(p.updated_at as string).toLocaleDateString() : 'Recently',
           feeAccountStatus: (p.fee_account_status as ParentData['feeAccountStatus']) || 'Good Standing',
           status: (p.status as ParentData['status']) || 'Active',
-        }));
+        };
+      });
 
-        if (isMounted) {
-          setParents(formattedParents);
-          setTotalParentsCount(formattedParents.length);
-          setActiveParentsCount(formattedParents.filter(p => p.status === 'Active').length);
-          setAttentionCount(formattedParents.filter(p => p.engagement === 'Low' || p.status === 'Locked').length);
-        }
-      } catch (err) {
-        console.error('Error fetching parents:', err);
-      } finally {
-        if (isMounted) setIsLoading(false);
+      if (isMounted) {
+        setParents(formattedParents);
+        setTotalParentsCount(formattedParents.length);
+        setActiveParentsCount(formattedParents.filter(p => p.status === 'Active').length);
+        setAttentionCount(formattedParents.filter(p => p.engagement === 'Low' || p.status === 'Locked').length);
       }
-    };
+    } catch (err) {
+      console.error('Error fetching parents:', err);
+    } finally {
+      if (isMounted) setIsLoading(false);
+    }
+  };
 
+  useEffect(() => {
+    let isMounted = true;
     loadData();
-
     return () => {
       isMounted = false;
     };
   }, []);
 
-  const handleOpenAddModal = () => {
-    const randomId = `PRN-24-${Math.floor(1000 + Math.random() * 9000)}`;
-    setGeneratedParentId(randomId);
-    setNewFirstName('');
-    setNewMiddleName('');
-    setNewLastName('');
-    setNewPrimaryPhone('');
-    setNewAltPhone('');
-    setNewEmail('');
-    setNewAddress('');
-    setAvatarFile(null);
-    setActiveModal('add');
+  const handleOpenAction = (type: 'link' | 'reset' | 'deactivate', parent: ParentData) => {
+    setSelectedParent(parent);
+    setActiveModal(type);
+    setOpenMenuId(null);
+    setSelectedStudentToLink('');
   };
 
-  const handleCreateParent = async () => {
-    if (!newFirstName || !newLastName || !newEmail || !newPrimaryPhone || !newAddress) {
-      alert('Please fill in all required fields marked with *');
+  // Execute Link Student to Parent
+  const executeLinkStudent = async () => {
+    if (!selectedParent || !selectedStudentToLink) {
+      alert('Please select a student ward to link.');
       return;
     }
-
     try {
       setIsSubmitting(true);
-      let uploadedAvatarUrl = null;
+      const { error } = await supabase
+        .from('students')
+        .update({ parent_id: selectedParent.id })
+        .eq('id', selectedStudentToLink);
 
-      if (avatarFile) {
-        const fileExt = avatarFile.name.split('.').pop();
-        const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const filePath = `parents/${fileName}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from('sabio_profile')
-          .upload(filePath, avatarFile);
-
-        if (uploadError) throw uploadError;
-
-        const { data: publicURLData } = supabase.storage
-          .from('sabio_profile')
-          .getPublicUrl(filePath);
-
-        uploadedAvatarUrl = publicURLData.publicUrl;
-      }
-
-      const { error: insertError } = await supabase.from('profiles').insert([
-        {
-          custom_id: generatedParentId,
-          first_name: newFirstName.trim(),
-          middle_name: newMiddleName.trim() || null,
-          last_name: newLastName.trim(),
-          full_name: `${newFirstName.trim()} ${newLastName.trim()}`,
-          relationship: newRelationship,
-          primary_phone: newPrimaryPhone.trim(),
-          alternate_phone: newAltPhone.trim() || null,
-          email: newEmail.trim(),
-          address: newAddress.trim(),
-          avatar_url: uploadedAvatarUrl,
-          role: 'parent',
-          engagement: 'Moderate',
-          fee_account_status: 'Good Standing',
-          status: 'Active'
-        }
-      ]);
-
-      if (insertError) throw insertError;
-
-      alert('Parent profile created successfully!');
+      if (error) throw error;
+      alert('Student linked successfully!');
       setActiveModal(null);
-      window.location.reload();
+      loadData();
     } catch (err: unknown) {
-      const errorMessage = typeof err === 'object' && err !== null && 'message' in err 
-        ? (err as { message: string }).message 
-        : String(err);
-      alert('Failed to create parent profile: ' + errorMessage);
+      alert('Error linking student: ' + String(err));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleOpenAction = (type: 'link' | 'reset' | 'deactivate', parent: ParentData) => {
-    setSelectedParent(parent);
-    setActiveModal(type);
-    setOpenMenuId(null);
+  // Execute Reset Account Simulation / Action
+  const executeResetAccount = async () => {
+    if (!selectedParent) return;
+    alert(`Password reset instructions simulated and sent to ${selectedParent.email}`);
+    setActiveModal(null);
+  };
+
+  // Execute Deactivate Account
+  const executeDeactivateAccount = async () => {
+    if (!selectedParent) return;
+    try {
+      setIsSubmitting(true);
+      const { error } = await supabase
+        .from('profiles')
+        .update({ status: 'Deactivated' })
+        .eq('id', selectedParent.id);
+
+      if (error) throw error;
+      alert('Parent account deactivated successfully!');
+      setActiveModal(null);
+      loadData();
+    } catch (err: unknown) {
+      alert('Error deactivating account: ' + String(err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filteredParents = parents.filter(parent => {
@@ -254,7 +233,7 @@ export const Parents: React.FC = () => {
 
           <div style={{ display: 'flex', gap: '10px' }}>
             <button 
-              onClick={handleOpenAddModal}
+              onClick={() => setIsAddModalOpen(true)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: '8px',
                 backgroundColor: '#002b49', border: 'none', padding: '8px 16px',
@@ -357,7 +336,7 @@ export const Parents: React.FC = () => {
                           <span style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic' }}>No linked students</span>
                         ) : (
                           parent.linkedStudents.map((ward, idx) => (
-                            <div key={idx} style={{ backgroundColor: '#f1f5f9', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', color: '#0f172a', fontWeight: 'bold', display: 'inline-block', marginRight: '4px' }}>
+                            <div key={idx} style={{ backgroundColor: '#f1f5f9', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', color: '#0f172a', fontWeight: 'bold', display: 'inline-block', marginRight: '4px', marginBottom: '2px' }}>
                               {ward.name} ({ward.className})
                             </div>
                           ))
@@ -388,13 +367,13 @@ export const Parents: React.FC = () => {
                         {openMenuId === parent.id && (
                           <div style={{ position: 'absolute', right: '16px', top: '40px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)', zIndex: 100, minWidth: '180px', overflow: 'hidden', textAlign: 'left' }}>
                             <button onClick={() => handleOpenAction('link', parent)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
-                              🏫 Link Student Ward
+                              Link Student Ward
                             </button>
-                            <button onClick={() => handleOpenAction('reset', parent)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
-                              🔄 Reset Portal Account
+                            <button onClick={() => handleOpenAction('reset', parent)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
+                              Reset Portal Account
                             </button>
                             <button onClick={() => handleOpenAction('deactivate', parent)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#dc2626', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
-                              🚫 Deactivate Account
+                              Deactivate Account
                             </button>
                           </div>
                         )}
@@ -407,100 +386,22 @@ export const Parents: React.FC = () => {
           </div>
         </div>
 
-        {/* POPUP 1: ADD PARENT PROFILE MODAL */}
-        {activeModal === 'add' && (
-          <div style={modalOverlayStyle}>
-            <div style={{ ...modalContainerStyle, maxWidth: '720px' }}>
-              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Add Parent Profile</h3>
-                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>Create a new guardian record and link to existing students.</p>
-                </div>
-                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
-              </div>
-
-              <div style={{ padding: '24px', maxHeight: '70vh', overflowY: 'auto' }}>
-                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', marginBottom: '14px' }}>PERSONAL INFORMATION</div>
-                
-                <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                  <label style={{ border: '2px dashed #cbd5e1', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '12px', backgroundColor: '#f8fafc', cursor: 'pointer', textAlign: 'center' }}>
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                    <span style={{ fontSize: '10px', color: '#64748b', marginTop: '4px' }}>{avatarFile ? avatarFile.name : 'JPG or PNG, max 2MB'}</span>
-                    <input type="file" accept="image/*" onChange={(e) => e.target.files && setAvatarFile(e.target.files[0])} style={{ display: 'none' }} />
-                  </label>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>First Name *</label>
-                      <input type="text" placeholder="e.g. Jane" value={newFirstName} onChange={(e) => setNewFirstName(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Last Name *</label>
-                      <input type="text" placeholder="e.g. Doe" value={newLastName} onChange={(e) => setNewLastName(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Middle Name</label>
-                      <input type="text" placeholder="Optional" value={newMiddleName} onChange={(e) => setNewMiddleName(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Parent ID</label>
-                      <input type="text" value={generatedParentId} disabled style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', marginTop: '4px', backgroundColor: '#f1f5f9', color: '#64748b', boxSizing: 'border-box' }} />
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Default Relationship</label>
-                  <select value={newRelationship} onChange={(e) => setNewRelationship(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                    <option value="Mother">Mother</option>
-                    <option value="Father">Father</option>
-                    <option value="Guardian">Guardian</option>
-                  </select>
-                </div>
-
-                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', margin: '20px 0 14px 0' }}>CONTACT INFORMATION</div>
-                
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Primary Phone *</label>
-                    <input type="text" placeholder="(555) 123-4567" value={newPrimaryPhone} onChange={(e) => setNewPrimaryPhone(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Alternate Phone</label>
-                    <input type="text" placeholder="Optional" value={newAltPhone} onChange={(e) => setNewAltPhone(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Contact Email *</label>
-                  <input type="email" placeholder="jane.doe@example.com" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                </div>
-
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Residential Address *</label>
-                  <input type="text" placeholder="Enter full address..." value={newAddress} onChange={(e) => setNewAddress(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                </div>
-              </div>
-
-              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={handleCreateParent} disabled={isSubmitting} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>
-                  {isSubmitting ? 'Saving...' : 'Add Parent'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* INTEGRATED SHARED ADD USER MODAL (DEFAULT ROLE: Parent) */}
+        <AddUserModal 
+          isOpen={isAddModalOpen} 
+          onClose={() => setIsAddModalOpen(false)} 
+          onUserAdded={() => {
+            loadData();
+          }}
+          defaultRole="Parent"
+        />
 
         {/* POPUP 2: LINK PARENT TO STUDENT MODAL */}
         {activeModal === 'link' && selectedParent && (
           <div style={modalOverlayStyle}>
             <div style={modalContainerStyle}>
               <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Link Parent to Student</h3>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Link Student Ward</h3>
                 <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
               </div>
 
@@ -511,7 +412,11 @@ export const Parents: React.FC = () => {
                 </div>
 
                 <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', marginBottom: '8px' }}>SELECT STUDENT WARD</div>
-                <select style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginBottom: '16px' }}>
+                <select 
+                  value={selectedStudentToLink}
+                  onChange={(e) => setSelectedStudentToLink(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginBottom: '16px' }}
+                >
                   <option value="">Choose student from database...</option>
                   {studentsList.map(stu => (
                     <option key={stu.id} value={stu.id}>{stu.name} ({stu.className})</option>
@@ -521,7 +426,7 @@ export const Parents: React.FC = () => {
 
               <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
                 <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Confirm Link</button>
+                <button onClick={executeLinkStudent} disabled={isSubmitting} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>{isSubmitting ? 'Linking...' : 'Confirm Link'}</button>
               </div>
             </div>
           </div>
@@ -536,11 +441,11 @@ export const Parents: React.FC = () => {
                 <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
               </div>
               <div style={{ padding: '24px' }}>
-                <p style={{ fontSize: '13px', color: '#334155' }}>Reset portal access and credentials for <strong>{selectedParent.name}</strong>?</p>
+                <p style={{ fontSize: '13px', color: '#334155' }}>Reset portal access and send new temporary credentials for <strong>{selectedParent.name}</strong>?</p>
               </div>
               <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
                 <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Reset Account</button>
+                <button onClick={executeResetAccount} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Reset Account</button>
               </div>
             </div>
           </div>
@@ -559,7 +464,7 @@ export const Parents: React.FC = () => {
               </div>
               <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
                 <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#b91c1c', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Deactivate</button>
+                <button onClick={executeDeactivateAccount} disabled={isSubmitting} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#b91c1c', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>{isSubmitting ? 'Deactivating...' : 'Deactivate'}</button>
               </div>
             </div>
           </div>

@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { getMyProfile } from '../services/teacherService';
+import type { MyProfile } from '../services/teacherService';
 
 interface TeacherLayoutProps {
   children: React.ReactNode;
@@ -10,9 +12,16 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
   const location = useLocation();
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(() => window.innerWidth < 1024);
+  const [setWindowWidth] = useState(window.innerWidth);
+  const [me, setMe] = useState<MyProfile | null>(null);
+
+  useEffect(() => {
+    getMyProfile().then(setMe).catch(() => setMe(null));
+  }, []);
 
   useEffect(() => {
     const handleResize = () => {
+      setWindowWidth(window.innerWidth);
       if (window.innerWidth < 1024) {
         setIsCollapsed(true);
       } else {
@@ -41,9 +50,9 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 
     },
     { 
-      label: 'Assessments', 
-      path: '/teacher/assessments', 
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> 
+    label: 'Assessments', 
+    path: '/teacher/assessments', 
+    icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> 
     },
     { 
       label: 'Class Attendance', 
@@ -97,7 +106,7 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
               onClick={() => navigate('/teacher-dashboard')}
               style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: isCollapsed ? 0 : '8px', cursor: 'pointer' }}
             >
-              <img src="/logo.png" alt="SABIO" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} style={{ height: '32px', objectFit: 'contain' }} />
+              <img src="/logo.png" alt="SABIO" onError={(e) => { (e.target as any).style.display = 'none'; }} style={{ height: '32px', objectFit: 'contain' }} />
               {!isCollapsed && (
                 <div>
                   <div style={{ fontSize: '18px', fontWeight: '900', color: theme.brandTitle, letterSpacing: '-0.5px' }}>SABIO</div>
@@ -171,17 +180,39 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
               backgroundColor: location.pathname === '/teacher/profile' ? theme.activeNavBg : 'transparent'
             }}
           >
-            <img 
-              src="https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=100&auto=format&fit=crop&q=60" 
-              alt="Sarah Jenkins" 
-              style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} 
-            />
+            {me?.avatarUrl ? (
+              <img 
+                src={me.avatarUrl} 
+                alt={me.fullName || 'Teacher Avatar'} 
+                style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} 
+              />
+            ) : (
+              <div
+                style={{
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '50%',
+                  backgroundColor: '#cbd5e1',
+                  color: '#334155',
+                  fontWeight: 'bold',
+                  fontSize: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}
+              >
+                {((me?.firstName?.[0] ?? '') + (me?.lastName?.[0] ?? '')).toUpperCase()}
+              </div>
+            )}
             {!isCollapsed && (
               <div style={{ minWidth: 0 }}>
                 <span style={{ fontSize: '12px', fontWeight: 'bold', color: theme.text, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  Sarah Jenkins
+                  {me?.fullName || 'Loading…'}
                 </span>
-                <span style={{ fontSize: '10px', color: theme.subText, display: 'block' }}>Science Teacher</span>
+                <span style={{ fontSize: '10px', color: theme.subText, display: 'block' }}>
+                  {me?.role ? me.role.charAt(0).toUpperCase() + me.role.slice(1) : ''}
+                </span>
               </div>
             )}
           </div>

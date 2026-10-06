@@ -1,35 +1,67 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { TeacherLayout } from '../components/TeacherLayout';
-
-interface Student {
-  id: string;
-  name: string;
-  studentId: string;
-  attendance: string;
-  averageScore: string;
-  performance: 'Good' | 'Needs Attention' | 'Excellent' | 'Average';
-  status: 'Active' | 'Inactive';
-  avatarInitials: string;
-  gender: string;
-  age: number;
-}
-
-const mockStudents: Student[] = [
-  { id: '1', name: 'Daniel Mensah', studentId: 'ST00124', attendance: '96%', averageScore: '81%', performance: 'Good', status: 'Active', avatarInitials: 'DM', gender: 'Male', age: 14 },
-  { id: '2', name: 'Ama Owusu', studentId: 'ST00125', attendance: '94%', averageScore: '76%', performance: 'Good', status: 'Active', avatarInitials: 'AO', gender: 'Female', age: 14 },
-  { id: '3', name: 'Kojo Asare', studentId: 'ST00126', attendance: '87%', averageScore: '61%', performance: 'Needs Attention', status: 'Active', avatarInitials: 'KA', gender: 'Male', age: 15 },
-  { id: '4', name: 'Michael Boateng', studentId: 'ST00127', attendance: '91%', averageScore: '73%', performance: 'Good', status: 'Active', avatarInitials: 'MB', gender: 'Male', age: 14 },
-  { id: '5', name: 'Abena Frimpong', studentId: 'ST00128', attendance: '98%', averageScore: '88%', performance: 'Excellent', status: 'Active', avatarInitials: 'AF', gender: 'Female', age: 14 },
-  { id: '6', name: 'Kwame Asante', studentId: 'ST00129', attendance: '78%', averageScore: '57%', performance: 'Needs Attention', status: 'Active', avatarInitials: 'KA', gender: 'Male', age: 15 },
-  { id: '7', name: 'Efua Atu', studentId: 'ST00130', attendance: '93%', averageScore: '69%', performance: 'Average', status: 'Active', avatarInitials: 'EM', gender: 'Female', age: 14 },
-  { id: '8', name: 'Yaw Osei', studentId: 'ST00131', attendance: '89%', averageScore: '64%', performance: 'Average', status: 'Active', avatarInitials: 'YO', gender: 'Male', age: 14 },
-];
+import { getMyClasses, getMyStudents, performanceOf } from '../services/teacherService';
+import type { TeacherStudent, TeacherClass } from '../services/teacherService';
 
 export const TeacherClassView: React.FC = () => {
-  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  //const [activeProfileTab, setActiveProfileTab] = useState<'overview' | 'academic' | 'attendance' | 'fees' | 'notes'>('overview');
+  const navigate = useNavigate();
+  const [classes, setClasses] = useState<TeacherClass[]>([]);
+  const [selectedClassId, setSelectedClassId] = useState<string>('');
+  const [students, setStudents] = useState<TeacherStudent[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [selectedStudent, setSelectedStudent] = useState<TeacherStudent | null>(null);
+  const [] = useState<'overview' | 'academic' | 'attendance' | 'fees' | 'notes'>('overview');
   const [searchQuery, setSearchQuery] = useState('');
   const [performanceFilter, setPerformanceFilter] = useState('');
+
+  useEffect(() => {
+    let isMounted = true;
+    getMyClasses()
+      .then((cls) => {
+        if (!isMounted) return;
+        setClasses(cls);
+        if (cls.length === 1) {
+          setSelectedClassId(cls[0].id);
+        }
+      })
+      .catch((err: any) => {
+        if (isMounted) {
+          setError(err.message || 'Failed to load classes');
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedClassId) {
+      setStudents([]);
+      return;
+    }
+    let isMounted = true;
+    setLoading(true);
+    setError(null);
+    getMyStudents(selectedClassId)
+      .then((data) => {
+        if (isMounted) {
+          setStudents(data);
+          setLoading(false);
+        }
+      })
+      .catch((err: any) => {
+        if (isMounted) {
+          setError(err.message || 'Failed to load students');
+          setLoading(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedClassId]);
 
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',
@@ -40,7 +72,7 @@ export const TeacherClassView: React.FC = () => {
     boxSizing: 'border-box',
   };
 
-  const getPerformanceBadge = (perf: Student['performance']) => {
+  const getPerformanceBadge = (perf: ReturnType<typeof performanceOf>) => {
     switch (perf) {
       case 'Excellent':
         return { bg: '#dcfce7', color: '#166534' };
@@ -55,20 +87,76 @@ export const TeacherClassView: React.FC = () => {
     }
   };
 
+  const attendanceRates = students
+    .map((s) => s.attendanceRate)
+    .filter((v): v is number => v !== null && v !== undefined);
+  const attendanceDisplay = attendanceRates.length > 0
+    ? `${(attendanceRates.reduce((acc, v) => acc + v, 0) / attendanceRates.length).toFixed(1)}%`
+    : '—';
+
+  const averageScores = students
+    .map((s) => s.averageScore)
+    .filter((v): v is number => v !== null && v !== undefined);
+  const averageScoreDisplay = averageScores.length > 0
+    ? `${(averageScores.reduce((acc, v) => acc + v, 0) / averageScores.length).toFixed(1)}%`
+    : '—';
+
+  const needingAttentionCount = students.filter(
+    (s) => performanceOf(s.averageScore) === 'Needs Attention'
+  ).length;
+
+  const filteredStudents = students
+    .filter((s) => {
+      if (!searchQuery) return true;
+      const q = searchQuery.toLowerCase();
+      return s.name.toLowerCase().includes(q) || (s.customId || '').toLowerCase().includes(q);
+    })
+    .filter((s) => {
+      if (!performanceFilter) return true;
+      return performanceOf(s.averageScore) === performanceFilter;
+    });
+
   return (
     <TeacherLayout>
       <div style={{ padding: 'clamp(16px, 3vw, 30px)', maxWidth: '1600px', margin: '0 auto', fontFamily: "'Inter', sans-serif" }}>
         
-        {/* VIEW 1: CLASS ROSTER (JHS 2A) */}
+        {/* VIEW 1: CLASS ROSTER */}
         {!selectedStudent ? (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '24px' }}>
               <div>
-                <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.5px' }}>
-                  JHS 2A — Students
-                </h1>
+                {classes.length === 0 ? (
+                  <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.5px' }}>
+                    No class assigned
+                  </h1>
+                ) : classes.length === 1 ? (
+                  <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.5px' }}>
+                    {classes[0].name} — Students
+                  </h1>
+                ) : (
+                  <select
+                    value={selectedClassId}
+                    onChange={(e) => setSelectedClassId(e.target.value)}
+                    style={{
+                      fontSize: '20px',
+                      fontWeight: '800',
+                      color: '#0f172a',
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      backgroundColor: '#ffffff',
+                    }}
+                  >
+                    <option value="">Select a class</option>
+                    {classes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>
-                  Integrated Science • 38 Students
+                  {students.length} Students
                 </p>
               </div>
 
@@ -76,7 +164,10 @@ export const TeacherClassView: React.FC = () => {
                 <button style={{ padding: '8px 16px', borderRadius: '10px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
                   More Options
                 </button>
-                <button style={{ padding: '8px 18px', borderRadius: '10px', border: 'none', backgroundColor: '#002b49', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>
+                <button 
+                  onClick={() => navigate('/teacher/attendance')}
+                  style={{ padding: '8px 18px', borderRadius: '10px', border: 'none', backgroundColor: '#002b49', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}
+                >
                   Take Attendance
                 </button>
               </div>
@@ -85,22 +176,22 @@ export const TeacherClassView: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
               <div style={cardStyle}>
                 <span style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>TOTAL STUDENTS</span>
-                <div style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a', marginTop: '6px' }}>38</div>
+                <div style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a', marginTop: '6px' }}>{students.length}</div>
               </div>
 
               <div style={cardStyle}>
                 <span style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>ATTENDANCE</span>
-                <div style={{ fontSize: '28px', fontWeight: '900', color: '#166534', marginTop: '6px' }}>94%</div>
+                <div style={{ fontSize: '28px', fontWeight: '900', color: '#166534', marginTop: '6px' }}>{attendanceDisplay}</div>
               </div>
 
               <div style={cardStyle}>
                 <span style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>CLASS AVERAGE</span>
-                <div style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a', marginTop: '6px' }}>72%</div>
+                <div style={{ fontSize: '28px', fontWeight: '900', color: '#0f172a', marginTop: '6px' }}>{averageScoreDisplay}</div>
               </div>
 
               <div style={{ ...cardStyle, borderColor: '#fecaca', backgroundColor: '#fff5f5' }}>
                 <span style={{ fontSize: '11px', fontWeight: '800', color: '#991b1b', textTransform: 'uppercase' }}>NEEDING ATTENTION</span>
-                <div style={{ fontSize: '28px', fontWeight: '900', color: '#dc2626', marginTop: '6px' }}>5</div>
+                <div style={{ fontSize: '28px', fontWeight: '900', color: '#dc2626', marginTop: '6px' }}>{needingAttentionCount}</div>
               </div>
             </div>
 
@@ -137,6 +228,12 @@ export const TeacherClassView: React.FC = () => {
               </div>
             </div>
 
+            {error && (
+              <div style={{ ...cardStyle, padding: '12px 16px', marginBottom: '20px', backgroundColor: '#fef2f2', borderColor: '#fecaca', color: '#dc2626', fontSize: '13px' }}>
+                {error}
+              </div>
+            )}
+
             <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
                 <thead>
@@ -150,20 +247,29 @@ export const TeacherClassView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {mockStudents
-                    .filter(s => s.name.toLowerCase().includes(searchQuery.toLowerCase()) || s.studentId.toLowerCase().includes(searchQuery.toLowerCase()))
-                    .filter(s => !performanceFilter || s.performance === performanceFilter)
-                    .map((student) => {
-                      const badge = getPerformanceBadge(student.performance);
+                  {loading ? (
+                    <tr>
+                      <td colSpan={6} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
+                        Loading…
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredStudents.map((student) => {
+                      const perf = performanceOf(student.averageScore);
+                      const badge = getPerformanceBadge(perf);
                       return (
                         <tr key={student.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                           <td style={{ padding: '12px 16px', fontWeight: 'bold', color: '#0f172a' }}>{student.name}</td>
-                          <td style={{ padding: '12px 16px', color: '#64748b', fontWeight: '600' }}>{student.studentId}</td>
-                          <td style={{ padding: '12px 16px', fontWeight: 'bold' }}>{student.attendance}</td>
-                          <td style={{ padding: '12px 16px', fontWeight: 'bold' }}>{student.averageScore}</td>
+                          <td style={{ padding: '12px 16px', color: '#64748b', fontWeight: '600' }}>{student.customId}</td>
+                          <td style={{ padding: '12px 16px', fontWeight: 'bold' }}>
+                            {student.attendanceRate !== null && student.attendanceRate !== undefined ? `${student.attendanceRate}%` : '—'}
+                          </td>
+                          <td style={{ padding: '12px 16px', fontWeight: 'bold' }}>
+                            {student.averageScore !== null && student.averageScore !== undefined ? `${student.averageScore}%` : '—'}
+                          </td>
                           <td style={{ padding: '12px 16px' }}>
                             <span style={{ backgroundColor: badge.bg, color: badge.color, padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>
-                              {student.performance}
+                              {perf}
                             </span>
                           </td>
                           <td style={{ padding: '12px 16px', textAlign: 'right' }}>
@@ -176,7 +282,8 @@ export const TeacherClassView: React.FC = () => {
                           </td>
                         </tr>
                       );
-                    })}
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -199,7 +306,7 @@ export const TeacherClassView: React.FC = () => {
                 <div>
                   <h2 style={{ margin: 0, fontSize: '24px', fontWeight: '800', color: '#0f172a' }}>{selectedStudent.name}</h2>
                   <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
-                    {selectedStudent.studentId} • {selectedStudent.gender}, {selectedStudent.age} yrs • Class JHS 2A
+                    {selectedStudent.customId} • {selectedStudent.gender}, {selectedStudent.age ?? '—'} yrs • Class {selectedStudent.className || '—'}
                   </div>
                 </div>
 
@@ -229,7 +336,7 @@ export const TeacherClassView: React.FC = () => {
               <div style={cardStyle}>
                 <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '800', color: '#0f172a' }}>Academic Performance</h3>
                 <div style={{ fontSize: '12px', color: '#334155' }}>
-                  Average score: <strong>{selectedStudent.averageScore}</strong> • Overall standing: <strong>{selectedStudent.performance}</strong>
+                  Average score: <strong>{selectedStudent.averageScore !== null && selectedStudent.averageScore !== undefined ? `${selectedStudent.averageScore}%` : '—'}</strong> • Overall standing: <strong>{performanceOf(selectedStudent.averageScore)}</strong>
                 </div>
               </div>
             </div>

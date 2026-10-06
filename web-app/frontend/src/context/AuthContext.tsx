@@ -1,9 +1,10 @@
-import React, { createContext, useState, useEffect, ReactNode } from 'react';
-import API from '../services/api';
+import React, { createContext, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
+import { supabase } from '../services/supabase';
 
 interface User {
-  id: number;
-  username: string;
+  id: string | number;
+  username?: string;
   email: string;
   role: 'ADMIN' | 'TEACHER' | 'ACCOUNTANT' | 'PARENT';
   first_name: string;
@@ -23,38 +24,88 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  const fetchProfile = async () => {
-    try {
-      const res = await API.get('users/profile/');
-      setUser(res.data);
-    } catch {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-      setUser(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      fetchProfile();
-    } else {
-      setLoading(false);
-    }
+    let isMounted = true;
+
+    const fetchProfile = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user) {
+          if (isMounted) setUser(null);
+          return;
+        }
+
+        // Fetch user profile from Supabase profiles table
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single();
+
+        if (isMounted) {
+          if (profile) {
+            setUser({
+              id: profile.id,
+              email: profile.email || session.user.email || '',
+              role: (profile.role ? profile.role.toUpperCase() : 'PARENT') as User['role'],
+              first_name: profile.first_name || '',
+              last_name: profile.last_name || '',
+            });
+          } else {
+            setUser(null);
+          }
+        }
+      } catch {
+        if (isMounted) setUser(null);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    fetchProfile();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!session?.user) {
+        if (isMounted) {
+          setUser(null);
+          setLoading(false);
+        }
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', session.user.id)
+        .single();
+
+      if (isMounted) {
+        if (profile) {
+          setUser({
+            id: profile.id,
+            email: profile.email || session.user.email || '',
+            role: (profile.role ? profile.role.toUpperCase() : 'PARENT') as User['role'],
+            first_name: profile.first_name || '',
+            last_name: profile.last_name || '',
+          });
+        }
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
-  const login = async (username: string, password: string) => {
-    const res = await API.post('token/', { username, password });
-    localStorage.setItem('access_token', res.data.access);
-    localStorage.setItem('refresh_token', res.data.refresh);
-    await fetchProfile();
+  const login = async (email: string, password: string) => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
   };
 
-  const logout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
+  const logout = async () => {
+    await supabase.auth.signOut();
     setUser(null);
   };
 
@@ -63,4 +114,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       {children}
     </AuthContext.Provider>
   );
+};
+
+import { useContext } from 'react';
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 };

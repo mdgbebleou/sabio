@@ -67,7 +67,7 @@ const mockNotifications: NotificationItem[] = [
 
 export const Notifications: React.FC = () => {
   const [activeModal, setActiveModal] = useState<'rule' | 'detail' | 'clearAll' | null>(null);
-  const [selectedNotification, setSelectedNotification] = useState<NotificationItem | null>(null);
+ // const [selectedNotification, setSelectedNotification] = useState<NotificationItem | null>(null);
   const [activeTab, setActiveTab] = useState<string>('All Notifications');
   const [selectedIds, setSelectedIds] = useState<string[]>(['1']);
 

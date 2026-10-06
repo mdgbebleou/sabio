@@ -66,7 +66,7 @@ export const Calendar: React.FC = () => {
   const [activeModal, setActiveModal] = useState<'create' | 'details' | 'edit' | 'audience' | 'delete' | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(mockEvents[3]);
   const [activeTab, setActiveTab] = useState<'Month' | 'Week' | 'Day' | 'Agenda'>('Month');
-  const [hasConflict, setHasConflict] = useState(true);
+  //const [hasConflict, setHasConflict] = useState(true);
 
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',

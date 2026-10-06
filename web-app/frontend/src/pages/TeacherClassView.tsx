@@ -27,7 +27,7 @@ const mockStudents: Student[] = [
 
 export const TeacherClassView: React.FC = () => {
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  const [activeProfileTab, setActiveProfileTab] = useState<'overview' | 'academic' | 'attendance' | 'fees' | 'notes'>('overview');
+  //const [activeProfileTab, setActiveProfileTab] = useState<'overview' | 'academic' | 'attendance' | 'fees' | 'notes'>('overview');
   const [searchQuery, setSearchQuery] = useState('');
   const [performanceFilter, setPerformanceFilter] = useState('');
 

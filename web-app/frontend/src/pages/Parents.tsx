@@ -73,7 +73,6 @@ export const Parents: React.FC = () => {
 
   // Fetch Parents (profiles with role='parent'), their linked students, and student dropdown list sorted newest first
   const loadData = async () => {
-    let isMounted = true;
     try {
       setIsLoading(true);
 
@@ -83,7 +82,7 @@ export const Parents: React.FC = () => {
         .select('id, first_name, last_name, custom_id, class_name')
         .order('created_at', { ascending: false });
 
-      if (dbStudents && isMounted) {
+      if (dbStudents) {
         setStudentsList(dbStudents.map((s: Record<string, unknown>) => ({
           id: s.id as string,
           name: `${s.first_name || ''} ${s.last_name || ''}`.trim(),
@@ -126,25 +125,20 @@ export const Parents: React.FC = () => {
         };
       });
 
-      if (isMounted) {
-        setParents(formattedParents);
-        setTotalParentsCount(formattedParents.length);
-        setActiveParentsCount(formattedParents.filter(p => p.status === 'Active').length);
-        setAttentionCount(formattedParents.filter(p => p.engagement === 'Low' || p.status === 'Locked').length);
-      }
+      setParents(formattedParents);
+      setTotalParentsCount(formattedParents.length);
+      setActiveParentsCount(formattedParents.filter(p => p.status === 'Active').length);
+      setAttentionCount(formattedParents.filter(p => p.engagement === 'Low' || p.status === 'Locked').length);
     } catch (err) {
       console.error('Error fetching parents:', err);
     } finally {
-      if (isMounted) setIsLoading(false);
+      setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    let isMounted = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadData();
-    return () => {
-      isMounted = false;
-    };
   }, []);
 
   const handleOpenAction = (type: 'link' | 'reset' | 'deactivate', parent: ParentData) => {

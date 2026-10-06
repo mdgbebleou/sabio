@@ -155,7 +155,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    justify: isCollapsed ? 'center' : 'flex-start',
+                    justifyContent: isCollapsed ? 'center' : 'flex-start',
                     gap: '10px',
                     padding: isCollapsed ? '10px' : '8px 12px',
                     borderRadius: '6px',
@@ -194,7 +194,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    justify: isCollapsed ? 'center' : 'flex-start',
+                    justifyContent: isCollapsed ? 'center' : 'flex-start',
                     gap: '10px',
                     padding: isCollapsed ? '10px' : '8px 12px',
                     borderRadius: '6px',
@@ -227,7 +227,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
             style={{ 
               display: 'flex', 
               alignItems: 'center', 
-              justify: isCollapsed ? 'center' : 'flex-start', 
+              justifyContent: isCollapsed ? 'center' : 'flex-start', 
               gap: '8px', 
               padding: '6px 8px', 
               borderRadius: '6px', 
@@ -265,7 +265,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
               padding: '6px 8px', 
               display: 'flex', 
               alignItems: 'center', 
-              justify: isCollapsed ? 'center' : 'flex-start', 
+              justifyContent: isCollapsed ? 'center' : 'flex-start', 
               gap: '8px', 
               cursor: 'pointer',
               borderRadius: '6px'

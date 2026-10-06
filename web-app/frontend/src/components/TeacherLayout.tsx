@@ -10,11 +10,9 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
   const location = useLocation();
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(() => window.innerWidth < 1024);
-  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
   useEffect(() => {
     const handleResize = () => {
-      setWindowWidth(window.innerWidth);
       if (window.innerWidth < 1024) {
         setIsCollapsed(true);
       } else {
@@ -43,9 +41,9 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 
     },
     { 
-    label: 'Assessments', 
-    path: '/teacher/assessments', 
-    icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> 
+      label: 'Assessments', 
+      path: '/teacher/assessments', 
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> 
     },
     { 
       label: 'Class Attendance', 
@@ -99,7 +97,7 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
               onClick={() => navigate('/teacher-dashboard')}
               style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: isCollapsed ? 0 : '8px', cursor: 'pointer' }}
             >
-              <img src="/logo.png" alt="SABIO" onError={(e) => { (e.target as any).style.display = 'none'; }} style={{ height: '32px', objectFit: 'contain' }} />
+              <img src="/logo.png" alt="SABIO" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} style={{ height: '32px', objectFit: 'contain' }} />
               {!isCollapsed && (
                 <div>
                   <div style={{ fontSize: '18px', fontWeight: '900', color: theme.brandTitle, letterSpacing: '-0.5px' }}>SABIO</div>
@@ -131,7 +129,7 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    justify: isCollapsed ? 'center' : 'flex-start',
+                    justifyContent: isCollapsed ? 'center' : 'flex-start',
                     gap: '10px',
                     padding: isCollapsed ? '10px' : '8px 12px',
                     borderRadius: '6px',
@@ -165,7 +163,7 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
             style={{ 
               display: 'flex', 
               alignItems: 'center', 
-              justify: isCollapsed ? 'center' : 'flex-start', 
+              justifyContent: isCollapsed ? 'center' : 'flex-start', 
               gap: '8px', 
               padding: '6px 8px', 
               borderRadius: '6px', 
@@ -203,7 +201,7 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
               padding: '6px 8px', 
               display: 'flex', 
               alignItems: 'center', 
-              justify: isCollapsed ? 'center' : 'flex-start', 
+              justifyContent: isCollapsed ? 'center' : 'flex-start', 
               gap: '8px', 
               cursor: 'pointer',
               borderRadius: '6px'
@@ -259,7 +257,7 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
         borderRadius: '6px', 
         display: 'flex', 
         alignItems: 'center', 
-        justify: 'center', 
+        justifyContent: 'center', 
         position: 'relative', 
         color: theme.iconColor 
       }}

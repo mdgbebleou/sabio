@@ -36,14 +36,14 @@ export const Academics: React.FC = () => {
   const [activeModal, setActiveModal] = useState<'createAssessment' | 'approveResults' | 'publishResults' | 'gradeScale' | null>(null);
   
   // Grade scale state for validation error demo
-  const [gradeScale, setGradeScale] = useState([
-    { grade: 'A', min: 70, max: 100, remark: 'Excellent' },
-    { grade: 'B', min: 60, max: 75, remark: 'Very Good' }, // Overlap with C
-    { grade: 'C', min: 50, max: 65, remark: 'Good' },
-    { grade: 'D', min: 45, max: 49, remark: 'Fair' },
-    { grade: 'E', min: 40, max: 44, remark: 'Pass' },
-    { grade: 'F', min: 0, max: 39, remark: 'Fail' },
-  ]);
+ // const [gradeScale, setGradeScale] = useState([
+   // { grade: 'A', min: 70, max: 100, remark: 'Excellent' },
+   // { grade: 'B', min: 60, max: 75, remark: 'Very Good' }, // Overlap with C
+    //{ grade: 'C', min: 50, max: 65, remark: 'Good' },
+    //{ grade: 'D', min: 45, max: 49, remark: 'Fair' },
+    //{ grade: 'E', min: 40, max: 44, remark: 'Pass' },
+   // { grade: 'F', min: 0, max: 39, remark: 'Fail' },
+  //]);
 
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',

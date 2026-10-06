@@ -69,11 +69,11 @@ const mockTeachers: TeacherData[] = [
 ];
 
 export const Teachers: React.FC = () => {
-  const [teachers, setTeachers] = useState<TeacherData[]>(mockTeachers);
+  //const [teachers, setTeachers] = useState<TeacherData[]>(mockTeachers);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDept, setSelectedDept] = useState('All');
   const [selectedSubject, setSelectedSubject] = useState('All');
-  const [selectedClass, setSelectedClass] = useState('All');
+  //const [selectedClass, setSelectedClass] = useState('All');
   const [selectedWorkload, setSelectedWorkload] = useState('All');
 
   // Modal Control States

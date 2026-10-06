@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+//import { useNavigate } from 'react-router-dom';
 
 export const StudentResultDetailPage: React.FC = () => {
-  const navigate = useNavigate();
+// const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<'OVERVIEW' | 'SUBJECT_DETAIL'>('OVERVIEW');
   const [selectedSubject, setSelectedSubject] = useState<string>('Mathematics');
 
@@ -111,23 +111,23 @@ export const StudentResultDetailPage: React.FC = () => {
             <div style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '16px', padding: '16px', marginBottom: '15px' }}>
               <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#0f172a', fontWeight: 'bold' }}>Score Breakdown</h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '13px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', pb: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
                   <span style={{ color: '#64748b' }}>Classwork</span>
                   <strong>18 / 20</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', pb: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
                   <span style={{ color: '#64748b' }}>Assignments</span>
                   <strong>17 / 20</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', pb: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
                   <span style={{ color: '#64748b' }}>Class Tests</span>
                   <strong>15 / 20</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', pb: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
                   <span style={{ color: '#64748b' }}>Mid-Term Examination</span>
                   <strong>32 / 40</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', pt: '6px', color: '#1e3a8a', fontWeight: 'bold', fontSize: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '6px', color: '#1e3a8a', fontWeight: 'bold', fontSize: '14px' }}>
                   <span>Total Score</span>
                   <span>82 / 100</span>
                 </div>

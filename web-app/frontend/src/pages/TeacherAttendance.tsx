@@ -1,69 +1,125 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { TeacherLayout } from '../components/TeacherLayout';
-
-type AttendanceStatus = 'Present' | 'Absent' | 'Late';
-
-interface AttendanceRecord {
-  id: string;
-  name: string;
-  studentId: string;
-  status: AttendanceStatus;
-  avatarInitials: string;
-  avatarUrl?: string;
-  remark?: string;
-}
-
-interface HistoryEntry {
-  id: string;
-  date: string;
-  className: string;
-  totalStudents: number;
-  present: number;
-  absent: number;
-  late: number;
-  status: string;
-}
-
-const initialRoster: AttendanceRecord[] = [
-  { id: '1', name: 'Abigail Arthur', studentId: 'JHS-24-001', status: 'Present', avatarInitials: 'AA' },
-  { id: '2', name: 'Benjamin Boakye', studentId: 'JHS-24-002', status: 'Absent', avatarInitials: 'BB', avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=60', remark: 'Sick Leave' },
-  { id: '3', name: 'Cynthia Darko', studentId: 'JHS-24-003', status: 'Late', avatarInitials: 'CD', remark: 'Traffic Delay' },
-  { id: '4', name: 'Daniela Ephraim', studentId: 'JHS-24-004', status: 'Present', avatarInitials: 'DE', avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=60' },
-  { id: '5', name: 'Daniel Mensah', studentId: 'ST00124', status: 'Present', avatarInitials: 'DM', avatarUrl: 'https://images.unsplash.com/photo-1544717305-2782549b5136?w=100&auto=format&fit=crop&q=60' },
-  { id: '6', name: 'Ama Owusu', studentId: 'ST00125', status: 'Present', avatarInitials: 'AO' },
-];
-
-const mockHistory: HistoryEntry[] = [
-  { id: '1', date: 'Aug 12, 2026', className: 'JHS 2A', totalStudents: 32, present: 30, absent: 2, late: 0, status: 'Recorded' },
-  { id: '2', date: 'Aug 11, 2026', className: 'JHS 2A', totalStudents: 32, present: 29, absent: 1, late: 2, status: 'Recorded' },
-  { id: '3', date: 'Aug 10, 2026', className: 'JHS 2A', totalStudents: 32, present: 31, absent: 0, late: 1, status: 'Recorded' },
-  { id: '4', date: 'Aug 9, 2026', className: 'JHS 2A', totalStudents: 32, present: 32, absent: 0, late: 0, status: 'Recorded' },
-];
+import { getMyClasses, getRoster, saveAttendance, getAttendanceHistory } from '../services/teacherService';
+import type { TeacherClass, RosterEntry, AttendanceStatus, AttendanceHistoryEntry } from '../services/teacherService';
 
 export const TeacherAttendance: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'record' | 'history'>('record');
-  const [selectedClass, setSelectedClass] = useState('JHS 2A - Integrated Science');
-  const [selectedDate, setSelectedDate] = useState('2026-08-12');
+  const [classes, setClasses] = useState<TeacherClass[]>([]);
+  const [selectedClassId, setSelectedClassId] = useState<string>('');
+  const [selectedDate, setSelectedDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [rosterRecorded, setRosterRecorded] = useState<boolean>(false);
+  const [history, setHistory] = useState<AttendanceHistoryEntry[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [roster, setRoster] = useState<AttendanceRecord[]>(initialRoster);
 
   // History filters
-  const [historyClass, setHistoryClass] = useState('JHS 2A');
+  const [historyClassId, setHistoryClassId] = useState<string>('all');
   const [historyStatusFilter, setHistoryStatusFilter] = useState('All Statuses');
 
   // Dynamic KPI counts
-  const totalStudents = 38; // Class roster capacity
-  const presentCount = roster.filter(r => r.status === 'Present').length + (totalStudents - roster.length);
+  const totalStudents = roster.length;
+  const presentCount = roster.filter(r => r.status === 'Present').length;
   const absentCount = roster.filter(r => r.status === 'Absent').length;
   const lateCount = roster.filter(r => r.status === 'Late').length;
 
-  const handleStatusChange = (id: string, newStatus: AttendanceStatus) => {
-    setRoster(prev => prev.map(item => item.id === id ? { ...item, status: newStatus } : item));
+  useEffect(() => {
+    let isMounted = true;
+    getMyClasses()
+      .then((cls) => {
+        if (!isMounted) return;
+        setClasses(cls);
+        if (cls.length > 0) {
+          setSelectedClassId(cls[0].id);
+        }
+      })
+      .catch((err: any) => {
+        if (isMounted) setError(err?.message || 'Failed to load classes.');
+      });
+
+    getAttendanceHistory()
+      .then((h) => {
+        if (!isMounted) return;
+        setHistory(h);
+      })
+      .catch((err: any) => {
+        if (isMounted) setError(err?.message || 'Failed to load attendance history.');
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'history') {
+      getAttendanceHistory()
+        .then(setHistory)
+        .catch((err: any) => setError(err?.message || 'Failed to load attendance history.'));
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!selectedClassId || !selectedDate) {
+      setRoster([]);
+      setRosterRecorded(false);
+      return;
+    }
+    let isMounted = true;
+    setLoading(true);
+    setError(null);
+    getRoster(selectedClassId, selectedDate)
+      .then((data) => {
+        if (!isMounted) return;
+        setRoster(data.entries);
+        setRosterRecorded(data.recorded);
+        setLoading(false);
+      })
+      .catch((err: any) => {
+        if (!isMounted) return;
+        setError(err?.message || 'Failed to load roster.');
+        setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedClassId, selectedDate]);
+
+  const handleStatusChange = (studentId: string, newStatus: AttendanceStatus) => {
+    setRoster(prev => prev.map(item => item.studentId === studentId ? { ...item, status: newStatus } : item));
   };
 
   const handleMarkAllPresent = () => {
     setRoster(prev => prev.map(item => ({ ...item, status: 'Present' })));
   };
+
+  async function handleSave() {
+    if (!selectedClassId || !selectedDate || roster.length === 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await saveAttendance(selectedClassId, selectedDate, roster);
+      const data = await getRoster(selectedClassId, selectedDate);
+      setRoster(data.entries);
+      setRosterRecorded(data.recorded);
+      alert('Attendance saved.');
+    } catch (err: any) {
+      setError(err?.message || 'Could not save attendance.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const filteredHistory = history.filter(item => {
+    if (historyClassId && historyClassId !== 'all') {
+      return item.classId === historyClassId;
+    }
+    return true;
+  });
 
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',
@@ -74,6 +130,8 @@ export const TeacherAttendance: React.FC = () => {
     boxSizing: 'border-box',
   };
 
+  const currentClassName = classes.find(c => c.id === selectedClassId)?.name;
+
   return (
     <TeacherLayout>
       <div style={{ padding: 'clamp(16px, 3vw, 30px)', maxWidth: '1600px', margin: '0 auto', fontFamily: "'Inter', sans-serif" }}>
@@ -81,7 +139,9 @@ export const TeacherAttendance: React.FC = () => {
         {/* HEADER SECTION */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '20px' }}>
           <div>
-            <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>Classes / JHS 2A / Attendance</div>
+            <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>
+              Classes {currentClassName ? `/ ${currentClassName} ` : ''}/ Attendance
+            </div>
             <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.5px' }}>Attendance Management</h1>
             <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>
               Record and manage daily attendance for your assigned classes.
@@ -141,12 +201,19 @@ export const TeacherAttendance: React.FC = () => {
                 <div style={{ marginBottom: '16px' }}>
                   <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '6px' }}>Select Class</label>
                   <select 
-                    value={selectedClass}
-                    onChange={(e) => setSelectedClass(e.target.value)}
+                    value={selectedClassId}
+                    onChange={(e) => setSelectedClassId(e.target.value)}
                     style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', color: '#0f172a', fontWeight: '600' }}
                   >
-                    <option>JHS 2A - Integrated Science</option>
-                    <option>JHS 2B - Integrated Science</option>
+                    {classes.length === 0 ? (
+                      <option disabled value="">No class assigned</option>
+                    ) : (
+                      classes.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
 
@@ -186,6 +253,12 @@ export const TeacherAttendance: React.FC = () => {
 
             </div>
 
+            {error && (
+              <div style={{ ...cardStyle, padding: '12px 16px', marginBottom: '20px', backgroundColor: '#fef2f2', borderColor: '#fecaca', color: '#dc2626', fontSize: '13px' }}>
+                {error}
+              </div>
+            )}
+
             {/* DAILY ATTENDANCE ROSTER TABLE */}
             <div style={{ ...cardStyle, padding: 0, overflow: 'hidden', marginBottom: '20px' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
@@ -221,77 +294,85 @@ export const TeacherAttendance: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {roster
-                    .filter(s => s.name.toLowerCase().includes(searchQuery.toLowerCase()) || s.studentId.toLowerCase().includes(searchQuery.toLowerCase()))
-                    .map((student) => (
-                      <tr key={student.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '12px 20px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            {student.avatarUrl ? (
-                              <img src={student.avatarUrl} alt={student.name} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
-                            ) : (
-                              <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 'bold', color: '#0f172a' }}>
-                                {student.avatarInitials}
-                              </div>
-                            )}
-                            <strong style={{ color: '#0f172a', fontSize: '13px' }}>{student.name}</strong>
-                          </div>
-                        </td>
-                        <td style={{ padding: '12px 20px', color: '#64748b', fontWeight: '600' }}>{student.studentId}</td>
-                        <td style={{ padding: '12px 20px' }}>
-                          <div style={{ display: 'inline-flex', backgroundColor: '#f1f5f9', padding: '3px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                            <button
-                              onClick={() => handleStatusChange(student.id, 'Present')}
-                              style={{
-                                border: 'none',
-                                padding: '5px 12px',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                backgroundColor: student.status === 'Present' ? '#dcfce7' : 'transparent',
-                                color: student.status === 'Present' ? '#166534' : '#64748b'
-                              }}
-                            >
-                              Present
-                            </button>
-                            <button
-                              onClick={() => handleStatusChange(student.id, 'Absent')}
-                              style={{
-                                border: 'none',
-                                padding: '5px 12px',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                backgroundColor: student.status === 'Absent' ? '#fef2f2' : 'transparent',
-                                color: student.status === 'Absent' ? '#dc2626' : '#64748b'
-                              }}
-                            >
-                              Absent
-                            </button>
-                            <button
-                              onClick={() => handleStatusChange(student.id, 'Late')}
-                              style={{
-                                border: 'none',
-                                padding: '5px 12px',
-                                borderRadius: '6px',
-                                fontSize: '11px',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                backgroundColor: student.status === 'Late' ? '#fef3c7' : 'transparent',
-                                color: student.status === 'Late' ? '#b45309' : '#64748b'
-                              }}
-                            >
-                              Late
-                            </button>
-                          </div>
-                        </td>
-                        <td style={{ padding: '12px 20px', color: '#64748b' }}>
-                          {student.remark || '-'}
-                        </td>
-                      </tr>
-                    ))}
+                  {loading ? (
+                    <tr>
+                      <td colSpan={4} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
+                        Loading…
+                      </td>
+                    </tr>
+                  ) : (
+                    roster
+                      .filter(s => s.name.toLowerCase().includes(searchQuery.toLowerCase()) || (s.customId || '').toLowerCase().includes(searchQuery.toLowerCase()))
+                      .map((student) => (
+                        <tr key={student.studentId} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '12px 20px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              {student.avatar ? (
+                                <img src={student.avatar} alt={student.name} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
+                              ) : (
+                                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: 'bold', color: '#0f172a' }}>
+                                  {student.initials}
+                                </div>
+                              )}
+                              <strong style={{ color: '#0f172a', fontSize: '13px' }}>{student.name}</strong>
+                            </div>
+                          </td>
+                          <td style={{ padding: '12px 20px', color: '#64748b', fontWeight: '600' }}>{student.customId}</td>
+                          <td style={{ padding: '12px 20px' }}>
+                            <div style={{ display: 'inline-flex', backgroundColor: '#f1f5f9', padding: '3px', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                              <button
+                                onClick={() => handleStatusChange(student.studentId, 'Present')}
+                                style={{
+                                  border: 'none',
+                                  padding: '5px 12px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  backgroundColor: student.status === 'Present' ? '#dcfce7' : 'transparent',
+                                  color: student.status === 'Present' ? '#166534' : '#64748b'
+                                }}
+                              >
+                                Present
+                              </button>
+                              <button
+                                onClick={() => handleStatusChange(student.studentId, 'Absent')}
+                                style={{
+                                  border: 'none',
+                                  padding: '5px 12px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  backgroundColor: student.status === 'Absent' ? '#fef2f2' : 'transparent',
+                                  color: student.status === 'Absent' ? '#dc2626' : '#64748b'
+                                }}
+                              >
+                                Absent
+                              </button>
+                              <button
+                                onClick={() => handleStatusChange(student.studentId, 'Late')}
+                                style={{
+                                  border: 'none',
+                                  padding: '5px 12px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                  backgroundColor: student.status === 'Late' ? '#fef3c7' : 'transparent',
+                                  color: student.status === 'Late' ? '#b45309' : '#64748b'
+                                }}
+                              >
+                                Late
+                              </button>
+                            </div>
+                          </td>
+                          <td style={{ padding: '12px 20px', color: '#64748b' }}>
+                            {student.remark || '-'}
+                          </td>
+                        </tr>
+                      ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -301,8 +382,12 @@ export const TeacherAttendance: React.FC = () => {
               <div style={{ fontSize: '12px', color: '#64748b' }}>
                 <strong style={{ color: '#0f172a' }}>{totalStudents}</strong> students • <span style={{ color: '#166534', fontWeight: 'bold' }}>{presentCount} Present</span> • <span style={{ color: '#dc2626', fontWeight: 'bold' }}>{absentCount} Absent</span> • <span style={{ color: '#b45309', fontWeight: 'bold' }}>{lateCount} Late</span>
               </div>
-              <button style={{ padding: '10px 24px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>
-                Save Attendance
+              <button 
+                onClick={handleSave}
+                disabled={saving}
+                style={{ padding: '10px 24px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1 }}
+              >
+                {saving ? 'Saving…' : (rosterRecorded ? 'Update Attendance' : 'Save Attendance')}
               </button>
             </div>
           </div>
@@ -317,12 +402,16 @@ export const TeacherAttendance: React.FC = () => {
                 <div>
                   <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Class</label>
                   <select 
-                    value={historyClass}
-                    onChange={(e) => setHistoryClass(e.target.value)}
+                    value={historyClassId}
+                    onChange={(e) => setHistoryClassId(e.target.value)}
                     style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px' }}
                   >
-                    <option>JHS 2A</option>
-                    <option>JHS 2B</option>
+                    <option value="all">All Classes</option>
+                    {classes.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -356,7 +445,9 @@ export const TeacherAttendance: React.FC = () => {
             {/* HISTORY LOG TABLE */}
             <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '800', color: '#0f172a' }}>History - {historyClass}</h3>
+                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '800', color: '#0f172a' }}>
+                  History{historyClassId !== 'all' && classes.find(c => c.id === historyClassId) ? ` - ${classes.find(c => c.id === historyClassId)?.name}` : ''}
+                </h3>
                 <button style={{ padding: '6px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '11px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
                   Export Log
                 </button>
@@ -376,17 +467,17 @@ export const TeacherAttendance: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {mockHistory.map((item) => (
+                  {filteredHistory.map((item) => (
                     <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '12px 20px', fontWeight: 'bold', color: '#0f172a' }}>{item.date}</td>
                       <td style={{ padding: '12px 20px', color: '#334155' }}>{item.className}</td>
-                      <td style={{ padding: '12px 20px', color: '#334155' }}>{item.totalStudents}</td>
+                      <td style={{ padding: '12px 20px', color: '#334155' }}>{item.total}</td>
                       <td style={{ padding: '12px 20px', color: '#166534', fontWeight: 'bold' }}>{item.present}</td>
                       <td style={{ padding: '12px 20px', color: '#dc2626', fontWeight: 'bold' }}>{item.absent}</td>
                       <td style={{ padding: '12px 20px', color: '#b45309', fontWeight: 'bold' }}>{item.late}</td>
                       <td style={{ padding: '12px 20px' }}>
                         <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '3px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold' }}>
-                          ✓ {item.status}
+                          ✓ Recorded
                         </span>
                       </td>
                       <td style={{ padding: '12px 20px', textAlign: 'right' }}>
@@ -400,7 +491,7 @@ export const TeacherAttendance: React.FC = () => {
               </table>
 
               <div style={{ padding: '12px 20px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#64748b' }}>
-                <span>Showing 1-4 of 4 records</span>
+                <span>Showing 1-{filteredHistory.length} of {filteredHistory.length} records</span>
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button disabled style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', opacity: 0.5, cursor: 'not-allowed' }}>&lt;</button>
                   <button disabled style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', opacity: 0.5, cursor: 'not-allowed' }}>&gt;</button>

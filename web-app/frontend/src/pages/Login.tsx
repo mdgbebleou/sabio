@@ -55,9 +55,10 @@ export const Login: React.FC = () => {
       localStorage.setItem('user_first_name', firstName);
 
       // 3. Navigate based on Role
-      if (role === 'Teacher') navigate('/teacher-dashboard');
-      else if (role === 'Accountant') navigate('/finance-dashboard');
-      else if (role === 'Parent') navigate('/parent-dashboard');
+      const normalizedRole = String(role).trim().toLowerCase();
+      if (normalizedRole === 'teacher') navigate('/teacher-dashboard');
+      else if (normalizedRole === 'accountant') navigate('/finance-dashboard');
+      else if (normalizedRole === 'parent') navigate('/parent-dashboard');
       else navigate('/users'); // Admin / Default Access Management page
 
     } catch (error: any) {

@@ -1453,3 +1453,548 @@ export async function getDashboardCounts(): Promise<DashboardCounts> {
 
   return { classesToday, attendancePending, pendingResults, unreadMessages };
 }
+// ---------- admin: teachers management ----------
+
+export interface AdminTeacherRow {
+  id: string;
+  customId: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  initials: string;
+  avatarUrl: string | null;
+  email: string;
+  status: string;
+  department: string | null;
+  subjects: string[];
+  periodsPerWeek: number | null;
+  employmentStatus: string | null;
+  classes: { id: string; name: string }[];
+  loadBadge: 'Balanced' | 'High Load' | 'Low Load' | null;
+  hasConflict: boolean;
+}
+
+const computeLoadBadge = (periods: number | null): 'Balanced' | 'High Load' | 'Low Load' | null => {
+  if (periods == null) return null;
+  if (periods > 24) return 'High Load';
+  if (periods < 12) return 'Low Load';
+  return 'Balanced';
+};
+
+const detectOverlap = (entries: { day_of_week: number; start_time: string; end_time: string }[]): boolean => {
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const a = entries[i];
+      const b = entries[j];
+      if (a.day_of_week !== b.day_of_week) continue;
+      // overlap if a.start < b.end AND b.start < a.end
+      if (a.start_time < b.end_time && b.start_time < a.end_time) return true;
+    }
+  }
+  return false;
+};
+
+export async function getAllTeachers(): Promise<AdminTeacherRow[]> {
+  // 1. all teacher profiles
+  const profiles = must<Row[]>(
+    await supabase
+      .from('profiles')
+      .select(
+        'id, email, role, status, first_name, last_name, full_name, custom_id, avatar_url, department, subjects, periods_per_week, employment_status'
+      )
+      .eq('role', 'teacher')
+      .order('first_name')
+  );
+  if (profiles.length === 0) return [];
+
+  const ids = profiles.map((p) => p.id as string);
+
+  // 2. classes owned by these teachers
+  const classes = must<Row[]>(
+    await supabase.from('classes').select('id, name, class_teacher_id').in('class_teacher_id', ids)
+  );
+  const classesByTeacher = new Map<string, { id: string; name: string }[]>();
+  for (const c of classes) {
+    const tid = c.class_teacher_id as string;
+    const arr = classesByTeacher.get(tid) || [];
+    arr.push({ id: c.id as string, name: (c.name as string) || '' });
+    classesByTeacher.set(tid, arr);
+  }
+
+  // 3. timetable entries for conflict detection
+  const tt = must<Row[]>(
+    await supabase
+      .from('timetable_entries')
+      .select('teacher_id, day_of_week, start_time, end_time')
+      .in('teacher_id', ids)
+  );
+  const ttByTeacher = new Map<string, { day_of_week: number; start_time: string; end_time: string }[]>();
+  for (const t of tt) {
+    const tid = t.teacher_id as string;
+    const arr = ttByTeacher.get(tid) || [];
+    arr.push({
+      day_of_week: Number(t.day_of_week ?? 0),
+      start_time: (t.start_time as string) || '',
+      end_time: (t.end_time as string) || '',
+    });
+    ttByTeacher.set(tid, arr);
+  }
+
+  return profiles.map((p) => {
+    const id = p.id as string;
+    const first = (p.first_name as string) || '';
+    const last = (p.last_name as string) || '';
+    const fullName = (p.full_name as string) || `${first} ${last}`.trim() || 'Teacher';
+    const periods = p.periods_per_week == null ? null : Number(p.periods_per_week);
+    const subjects = Array.isArray(p.subjects) ? (p.subjects as string[]) : [];
+    const teacherClasses = classesByTeacher.get(id) || [];
+    const ttEntries = ttByTeacher.get(id) || [];
+    return {
+      id,
+      customId: (p.custom_id as string) || '',
+      firstName: first,
+      lastName: last,
+      fullName,
+      initials: `${first.charAt(0)}${last.charAt(0)}`.toUpperCase() || '?',
+      avatarUrl: (p.avatar_url as string) || null,
+      email: (p.email as string) || '',
+      status: (p.status as string) || 'ACTIVE',
+      department: (p.department as string) || null,
+      subjects,
+      periodsPerWeek: periods,
+      employmentStatus: (p.employment_status as string) || null,
+      classes: teacherClasses,
+      loadBadge: computeLoadBadge(periods),
+      hasConflict: detectOverlap(ttEntries),
+    };
+  });
+}
+
+export async function getClassesForAssign(): Promise<{ id: string; name: string }[]> {
+  const rows = must<Row[]>(
+    await supabase.from('classes').select('id, name').order('name')
+  );
+  return rows.map((c) => ({ id: c.id as string, name: (c.name as string) || '' }));
+}
+
+export interface TeacherPatch {
+  department?: string | null;
+  subjects?: string[] | null;
+  periodsPerWeek?: number | null;
+  employmentStatus?: string | null;
+  status?: string;
+}
+
+export async function updateTeacherProfile(id: string, patch: TeacherPatch): Promise<void> {
+  const update: Row = {};
+  if (patch.department !== undefined) update.department = patch.department?.trim() || null;
+  if (patch.subjects !== undefined) update.subjects = patch.subjects ?? null;
+  if (patch.periodsPerWeek !== undefined) update.periods_per_week = patch.periodsPerWeek;
+  if (patch.employmentStatus !== undefined) update.employment_status = patch.employmentStatus?.trim() || null;
+  if (patch.status !== undefined) update.status = patch.status;
+  if (Object.keys(update).length === 0) return;
+  const { error } = await supabase.from('profiles').update(update).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function assignClassToTeacher(teacherId: string, classId: string): Promise<void> {
+  // clear any existing teacher of that class first
+  const { error: clearErr } = await supabase
+    .from('classes')
+    .update({ class_teacher_id: null })
+    .eq('id', classId);
+  if (clearErr) throw new Error(clearErr.message);
+
+  // set the new teacher
+  const { error } = await supabase
+    .from('classes')
+    .update({ class_teacher_id: teacherId })
+    .eq('id', classId);
+  if (error) throw new Error(error.message);
+}
+
+export async function unassignTeacherClasses(teacherId: string): Promise<void> {
+  const { error } = await supabase
+    .from('classes')
+    .update({ class_teacher_id: null })
+    .eq('class_teacher_id', teacherId);
+  if (error) throw new Error(error.message);
+}
+
+export async function deactivateTeacher(teacherId: string): Promise<void> {
+  // 1. clear class assignments
+  await unassignTeacherClasses(teacherId);
+  // 2. set status
+  const { error } = await supabase
+    .from('profiles')
+    .update({ status: 'Deactivated' })
+    .eq('id', teacherId);
+  if (error) throw new Error(error.message);
+}
+
+export async function detectTeacherConflicts(teacherId: string): Promise<boolean> {
+  const entries = must<Row[]>(
+    await supabase
+      .from('timetable_entries')
+      .select('day_of_week, start_time, end_time')
+      .eq('teacher_id', teacherId)
+  );
+  return detectOverlap(
+    entries.map((e) => ({
+      day_of_week: Number(e.day_of_week ?? 0),
+      start_time: (e.start_time as string) || '',
+      end_time: (e.end_time as string) || '',
+    }))
+  );
+}
+// ---------- admin: academics module ----------
+
+export interface AcademicTerm {
+  id: string;
+  academicYear: string;
+  termName: string;
+  startDate: string;
+  endDate: string;
+  submissionDeadline: string | null;
+  isActive: boolean;
+}
+
+export async function getActiveTerm(): Promise<AcademicTerm | null> {
+  const { data, error } = await supabase
+    .from('academic_terms')
+    .select('id, academic_year, term_name, start_date, end_date, submission_deadline, is_active')
+    .eq('is_active', true)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  const r = data as Row;
+  return {
+    id: r.id as string,
+    academicYear: (r.academic_year as string) || '',
+    termName: (r.term_name as string) || '',
+    startDate: (r.start_date as string) || '',
+    endDate: (r.end_date as string) || '',
+    submissionDeadline: (r.submission_deadline as string) || null,
+    isActive: !!r.is_active,
+  };
+}
+
+export interface GradeScaleRow {
+  id: string;
+  grade: string;
+  minScore: number;
+  maxScore: number;
+  remark: string | null;
+}
+
+export async function getGradeScale(): Promise<GradeScaleRow[]> {
+  const rows = must<Row[]>(
+    await supabase
+      .from('grade_scales')
+      .select('id, grade, min_score, max_score, remark')
+      .order('min_score', { ascending: false })
+  );
+  return rows.map((r) => ({
+    id: r.id as string,
+    grade: (r.grade as string) || '',
+    minScore: Number(r.min_score),
+    maxScore: Number(r.max_score),
+    remark: (r.remark as string) || null,
+  }));
+}
+
+export interface GradeScaleUpdate {
+  grade: string;
+  minScore: number;
+  maxScore: number;
+  remark: string | null;
+}
+
+export async function replaceGradeScale(rows: GradeScaleUpdate[]): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  // delete today's rows, re-insert
+  const { error: delErr } = await supabase
+    .from('grade_scales')
+    .delete()
+    .eq('effective_from', today);
+  if (delErr) throw new Error(delErr.message);
+
+  if (rows.length === 0) return;
+  const payload = rows.map((r) => ({
+    grade: r.grade.trim(),
+    min_score: r.minScore,
+    max_score: r.maxScore,
+    remark: r.remark?.trim() || null,
+    effective_from: today,
+  }));
+  const { error } = await supabase.from('grade_scales').insert(payload);
+  if (error) throw new Error(error.message);
+}
+
+export interface ClassPerformanceRow {
+  classId: string;
+  className: string;
+  studentsCount: number;
+  avgScore: number | null;
+  completionPct: number;
+  assessmentCount: number;
+  status: 'Improving' | 'Review' | 'Stable';
+  changeLabel: string;
+}
+
+export interface AdminAssessmentRow {
+  id: string;
+  title: string;
+  subject: string;
+  classId: string;
+  className: string;
+  teacherId: string | null;
+  teacherName: string;
+  status: 'Draft' | 'Submitted';
+  approvalStatus: 'Pending' | 'Approved' | 'Rejected' | 'Published';
+  scoredCount: number;
+  studentCount: number;
+  submittedAt: string | null;
+  approvedAt: string | null;
+  publishedAt: string | null;
+}
+
+export interface AcademicsDashboard {
+  totalAssessments: number;
+  draftCount: number;
+  submittedCount: number;
+  pendingApprovalCount: number;
+  approvedCount: number;
+  publishedCount: number;
+  avgScoreAll: number | null;
+  studentsAssessed: number;
+  studentsTotal: number;
+  classes: ClassPerformanceRow[];
+  pendingApprovals: AdminAssessmentRow[];
+  attentionCount: number;
+}
+
+export async function getAcademicsDashboard(): Promise<AcademicsDashboard> {
+  // 1. classes
+  const classes = must<Row[]>(
+    await supabase.from('classes').select('id, name, class_teacher_id').order('name')
+  );
+  
+  const classNameById = new Map(classes.map((c) => [c.id as string, (c.name as string) || '']));
+  const classById = new Map(classes.map((c) => [c.id as string, c]));
+
+  // 2. teachers (for pending approvals list)
+  const teachers = must<Row[]>(
+    await supabase.from('profiles').select('id, first_name, last_name, full_name').eq('role', 'teacher')
+  );
+  const teacherNameById = new Map(
+    teachers.map((t) => [
+      t.id as string,
+      (t.full_name as string) ||
+        `${(t.first_name as string) || ''} ${(t.last_name as string) || ''}`.trim() ||
+        '—',
+    ])
+  );
+
+  // 3. all assessments
+  const assessments = must<Row[]>(
+    await supabase
+      .from('assessments')
+      .select(
+        'id, title, subject, class_id, status, approval_status, created_by, approved_at, published_at'
+      )
+      .order('created_at', { ascending: false })
+  );
+
+  const assessmentIds = assessments.map((a) => a.id as string);
+
+  // 4. all students
+  const students = must<Row[]>(
+    await supabase.from('students').select('id, class_id')
+  );
+  const studentsByClass = new Map<string, number>();
+  for (const s of students) {
+    const cid = s.class_id as string;
+    if (cid) studentsByClass.set(cid, (studentsByClass.get(cid) || 0) + 1);
+  }
+  const totalStudents = students.length;
+
+  // 5. all scores
+  let scoreRows: Row[] = [];
+  if (assessmentIds.length > 0) {
+    scoreRows = must<Row[]>(
+      await supabase
+        .from('scores')
+        .select('assessment_id, student_id, total_score')
+        .in('assessment_id', assessmentIds)
+    );
+  }
+
+  // scored count per assessment + avg score
+  const scoredByAssessment = new Map<string, number>();
+  let scoreSum = 0;
+  let scoreCount = 0;
+  const studentsWithScores = new Set<string>();
+  const scoresByClass = new Map<string, number[]>();
+
+  for (const s of scoreRows) {
+    const aid = s.assessment_id as string;
+    scoredByAssessment.set(aid, (scoredByAssessment.get(aid) || 0) + 1);
+
+    const raw = s.total_score;
+    if (raw != null) {
+      const v = Number(raw);
+      scoreSum += v;
+      scoreCount += 1;
+      studentsWithScores.add(s.student_id as string);
+
+      // figure out which class this assessment belongs to
+      const a = assessments.find((x) => x.id === aid);
+      if (a) {
+        const cid = a.class_id as string;
+        if (cid) {
+          const arr = scoresByClass.get(cid) || [];
+          arr.push(v);
+          scoresByClass.set(cid, arr);
+        }
+      }
+    }
+  }
+
+  const avgScoreAll = scoreCount > 0 ? Math.round((scoreSum / scoreCount) * 10) / 10 : null;
+
+  // assessment counts
+  const totalAssessments = assessments.length;
+  const draftCount = assessments.filter((a) => a.status === 'Draft').length;
+  const submittedCount = assessments.filter((a) => a.status === 'Submitted').length;
+  const pendingApprovalCount = assessments.filter((a) => a.approval_status === 'Pending' && a.status === 'Submitted').length;
+  const approvedCount = assessments.filter((a) => a.approval_status === 'Approved').length;
+  const publishedCount = assessments.filter((a) => a.approval_status === 'Published').length;
+
+  // per-class performance
+  const classPerf: ClassPerformanceRow[] = classes.map((c) => {
+    const cid = c.id as string;
+    const studentCount = studentsByClass.get(cid) || 0;
+    const classAssessments = assessments.filter((a) => a.class_id === cid);
+    const classAssessmentCount = classAssessments.length;
+    const classScores = scoresByClass.get(cid) || [];
+    const avg = classScores.length > 0
+      ? Math.round((classScores.reduce((a, b) => a + b, 0) / classScores.length) * 10) / 10
+      : null;
+
+    // completion = scored / (students × assessments)
+    const denom = studentCount * classAssessmentCount;
+    const scoredTotal = classAssessments.reduce(
+      (sum, a) => sum + (scoredByAssessment.get(a.id as string) || 0),
+      0
+    );
+    const completionPct = denom > 0 ? Math.round((scoredTotal / denom) * 100) : 0;
+
+    const status: ClassPerformanceRow['status'] =
+      avg == null ? 'Stable' : avg >= 70 ? 'Improving' : avg < 55 ? 'Review' : 'Stable';
+    const changeLabel = avg == null ? '—' : '—';
+
+    return {
+      classId: cid,
+      className: (c.name as string) || '',
+      studentsCount: studentCount,
+      avgScore: avg,
+      completionPct,
+      assessmentCount: classAssessmentCount,
+      status,
+      changeLabel,
+    };
+  });
+
+  const attentionCount = classPerf.filter((c) => c.status === 'Review').length;
+
+  // pending approvals: submitted but not yet approved/published
+  const pendingApprovals: AdminAssessmentRow[] = assessments
+    .filter((a) => a.status === 'Submitted' && (a.approval_status === 'Pending' || a.approval_status === 'Rejected'))
+    .map((a) => {
+      const cid = a.class_id as string;
+      const c = classById.get(cid);
+      const teacherId = (c?.class_teacher_id as string) || (a.created_by as string) || null;
+      return {
+        id: a.id as string,
+        title: (a.title as string) || '',
+        subject: (a.subject as string) || '',
+        classId: cid,
+        className: classNameById.get(cid) || '',
+        teacherId,
+        teacherName: teacherId ? (teacherNameById.get(teacherId) || '—') : '—',
+        status: 'Submitted',
+        approvalStatus: ((a.approval_status as string) || 'Pending') as AdminAssessmentRow['approvalStatus'],
+        scoredCount: scoredByAssessment.get(a.id as string) || 0,
+        studentCount: studentsByClass.get(cid) || 0,
+        submittedAt: null,
+        approvedAt: (a.approved_at as string) || null,
+        publishedAt: (a.published_at as string) || null,
+      };
+    });
+
+  return {
+    totalAssessments,
+    draftCount,
+    submittedCount,
+    pendingApprovalCount,
+    approvedCount,
+    publishedCount,
+    avgScoreAll,
+    studentsAssessed: studentsWithScores.size,
+    studentsTotal: totalStudents,
+    classes: classPerf,
+    pendingApprovals,
+    attentionCount,
+  };
+}
+
+export async function approveAssessment(assessmentId: string): Promise<void> {
+  if (!assessmentId) throw new Error('No assessment selected.');
+  const uid = await currentUserId();
+  const { data, error } = await supabase
+    .from('assessments')
+    .update({
+      approval_status: 'Approved',
+      approved_by: uid,
+      approved_at: new Date().toISOString(),
+    })
+    .eq('id', assessmentId)
+    .select('id');
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error('Update failed — assessment not found or permission denied.');
+  }
+}
+
+export async function rejectAssessment(assessmentId: string, reason: string): Promise<void> {
+  if (!assessmentId) throw new Error('No assessment selected.');
+  const { data, error } = await supabase
+    .from('assessments')
+    .update({
+      approval_status: 'Rejected',
+      rejected_reason: reason.trim() || null,
+    })
+    .eq('id', assessmentId)
+    .select('id');
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error('Update failed — assessment not found or permission denied.');
+  }
+}
+
+export async function publishAssessment(assessmentId: string): Promise<void> {
+  if (!assessmentId) throw new Error('No assessment selected.');
+  const { data, error } = await supabase
+    .from('assessments')
+    .update({
+      approval_status: 'Published',
+      published_at: new Date().toISOString(),
+    })
+    .eq('id', assessmentId)
+    .select('id');
+  if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error('Update failed — assessment not found or permission denied.');
+  }
+}

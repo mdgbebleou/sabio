@@ -143,23 +143,27 @@ export const TeacherAcademics: React.FC = () => {
     }));
   };
 
+  // shared: build score entries from current edits
+  const buildScoreEntries = useCallback(() => {
+    if (!detail) return [];
+    return detail.roster.map((r) => {
+      const edit = scoreEdits[r.studentId] || { ca: '', exam: '' };
+      return {
+        studentId: r.studentId,
+        caScore: edit.ca === '' ? null : Number(edit.ca),
+        examScore: edit.exam === '' ? null : Number(edit.exam),
+        remark: null,
+      };
+    });
+  }, [detail, scoreEdits]);
+
   const handleSave = async () => {
     if (!detail) return;
     setSaving(true);
     setError(null);
     try {
-      const entries = detail.roster.map((r) => {
-        const edit = scoreEdits[r.studentId] || { ca: '', exam: '' };
-        return {
-          studentId: r.studentId,
-          caScore: edit.ca === '' ? null : Number(edit.ca),
-          examScore: edit.exam === '' ? null : Number(edit.exam),
-          remark: null,
-        };
-      });
-      await saveScores(detail.assessment.id, entries);
+      await saveScores(detail.assessment.id, buildScoreEntries());
       await loadAssessment(detail.assessment.id);
-      // refresh assessments list so counts update
       const asmts = await getMyAssessments();
       setAssessments(asmts);
       alert('Scores saved.');
@@ -176,6 +180,9 @@ export const TeacherAcademics: React.FC = () => {
     setSubmitting(true);
     setError(null);
     try {
+      // 1. Save scores first so nothing is lost if the page is submitted empty
+      await saveScores(detail.assessment.id, buildScoreEntries());
+      // 2. Then flip status to Submitted
       await submitAssessment(detail.assessment.id);
       await loadAssessment(detail.assessment.id);
       const asmts = await getMyAssessments();
@@ -199,7 +206,7 @@ export const TeacherAcademics: React.FC = () => {
       ]);
       if (!student) throw new Error('Student not found.');
 
-      // Option (b): only Submitted assessments count toward the average
+      // only submitted assessments count toward average
       const submitted = scores.filter((s) => s.status === 'Submitted');
       const avg =
         submitted.length > 0
@@ -235,7 +242,7 @@ export const TeacherAcademics: React.FC = () => {
     <TeacherLayout>
       <div style={{ padding: 'clamp(16px, 3vw, 30px)', maxWidth: '1600px', margin: '0 auto', fontFamily: "'Inter', sans-serif" }}>
 
-        {/* STUDENT RESULT DETAIL VIEW */}
+        {/* STUDENT DETAIL VIEW */}
         {studentDetail ? (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>

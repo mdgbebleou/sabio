@@ -58,11 +58,9 @@ export const TeacherAssessments: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [classFilter, setClassFilter] = useState<string>('All');
 
-  // Create form
   const [newTitle, setNewTitle] = useState('');
   const [newClassId, setNewClassId] = useState('');
   const [newSubject, setNewSubject] = useState('Integrated Science');
@@ -76,7 +74,6 @@ export const TeacherAssessments: React.FC = () => {
   const [newInstructions, setNewInstructions] = useState('');
   const [creating, setCreating] = useState(false);
 
-  // Detail / results
   const [detail, setDetail] = useState<AssessmentDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [scoreEdits, setScoreEdits] = useState<Record<string, { ca: string; exam: string }>>({});
@@ -149,7 +146,6 @@ export const TeacherAssessments: React.FC = () => {
         caWeight: caW,
         examWeight: exW,
       });
-      // reset form
       setNewTitle('');
       setNewInstructions('');
       setActiveView('list');
@@ -189,21 +185,25 @@ export const TeacherAssessments: React.FC = () => {
     }));
   };
 
+  const buildScoreEntries = useCallback(() => {
+    if (!detail) return [];
+    return detail.roster.map((r) => {
+      const edit = scoreEdits[r.studentId] || { ca: '', exam: '' };
+      return {
+        studentId: r.studentId,
+        caScore: edit.ca === '' ? null : Number(edit.ca),
+        examScore: edit.exam === '' ? null : Number(edit.exam),
+        remark: null,
+      };
+    });
+  }, [detail, scoreEdits]);
+
   const handleSaveScores = async () => {
     if (!detail) return;
     setSaving(true);
     setError(null);
     try {
-      const entries = detail.roster.map((r) => {
-        const edit = scoreEdits[r.studentId] || { ca: '', exam: '' };
-        return {
-          studentId: r.studentId,
-          caScore: edit.ca === '' ? null : Number(edit.ca),
-          examScore: edit.exam === '' ? null : Number(edit.exam),
-          remark: null,
-        };
-      });
-      await saveScores(detail.assessment.id, entries);
+      await saveScores(detail.assessment.id, buildScoreEntries());
       const refreshed = await getAssessment(detail.assessment.id);
       setDetail(refreshed);
       const edits: Record<string, { ca: string; exam: string }> = {};
@@ -228,6 +228,9 @@ export const TeacherAssessments: React.FC = () => {
     setSubmitting(true);
     setError(null);
     try {
+      // 1. Save first — this is the fix for the empty-submission bug
+      await saveScores(detail.assessment.id, buildScoreEntries());
+      // 2. Then submit
       await submitAssessment(detail.assessment.id);
       const refreshed = await getAssessment(detail.assessment.id);
       setDetail(refreshed);
@@ -263,7 +266,6 @@ export const TeacherAssessments: React.FC = () => {
   const draftCount = assessments.filter((a) => a.status === 'Draft').length;
   const submittedCount = assessments.filter((a) => a.status === 'Submitted').length;
 
-  // score distribution for results view (computed from detail)
   const distribution = { A: 0, B: 0, C: 0, D: 0, F: 0 };
   if (detail) {
     for (const r of detail.roster) {
@@ -292,7 +294,7 @@ export const TeacherAssessments: React.FC = () => {
           </div>
         )}
 
-        {/* ================= LIST ================= */}
+        {/* LIST */}
         {activeView === 'list' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '20px' }}>
@@ -411,7 +413,7 @@ export const TeacherAssessments: React.FC = () => {
           </div>
         )}
 
-        {/* ================= CREATE ================= */}
+        {/* CREATE */}
         {activeView === 'create' && (
           <div style={{ maxWidth: '900px', margin: '0 auto' }}>
             <button
@@ -582,7 +584,7 @@ export const TeacherAssessments: React.FC = () => {
           </div>
         )}
 
-        {/* ================= DETAIL ================= */}
+        {/* DETAIL */}
         {activeView === 'detail' && (
           <div>
             <button
@@ -665,7 +667,7 @@ export const TeacherAssessments: React.FC = () => {
           </div>
         )}
 
-        {/* ================= RESULTS ================= */}
+        {/* RESULTS */}
         {activeView === 'results' && detail && (
           <div>
             <button

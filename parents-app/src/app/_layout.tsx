@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import { StudentProvider } from '../context/StudentContext';
 import { supabase } from '../services/supabase';
 import { View, ActivityIndicator } from 'react-native';
 import { ThemeProvider } from '../context/ThemeContext';
@@ -26,7 +27,6 @@ export default function RootLayout() {
   useEffect(() => {
     if (isLoading) return;
 
-    // Check if the current route is login
     const isLoginPage = segments[0] === 'login';
 
     if (!isAuthenticated && !isLoginPage) {
@@ -46,7 +46,9 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <Stack screenOptions={{ headerShown: false }} />
+      <StudentProvider>
+        <Stack screenOptions={{ headerShown: false }} />
+      </StudentProvider>
     </ThemeProvider>
   );
 }

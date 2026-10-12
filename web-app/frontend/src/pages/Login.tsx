@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../services/supabase'; // <--- Switched to Supabase client
+import { supabase } from '../services/supabase'; 
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -59,11 +59,12 @@ export const Login: React.FC = () => {
       if (normalizedRole === 'teacher') navigate('/teacher-dashboard');
       else if (normalizedRole === 'accountant') navigate('/finance-dashboard');
       else if (normalizedRole === 'parent') navigate('/parent-dashboard');
+      else if (normalizedRole === 'admin') navigate('/dashboard');
       else navigate('/users'); // Admin / Default Access Management page
 
-    } catch (error: any) {
-      console.log("Login Error:", error);
-      setErrorMessage(error.message || 'Invalid email or password.');
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : 'Failed to login';
+      setErrorMessage(errMessage);
     } finally {
       setIsLoading(false);
     }
@@ -120,7 +121,12 @@ export const Login: React.FC = () => {
           <div style={{ maxWidth: '380px', width: '100%', margin: '0 auto' }}>
             <div style={{ textAlign: 'center', marginBottom: '28px' }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', marginBottom: '6px' }}>
-                <img src="/logo.png" alt="SABIO Logo" onError={(e) => { (e.target as any).style.display = 'none'; }} style={{ height: '44px', objectFit: 'contain' }} />
+                <img 
+                  src="/logo.png" 
+                  alt="SABIO Logo" 
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} 
+                  style={{ height: '44px', objectFit: 'contain' }} 
+                />
                 <div style={{ textAlign: 'left' }}>
                   <div style={{ fontSize: '24px', fontWeight: '900', color: '#002b49', letterSpacing: '-0.5px', lineHeight: 1 }}>SABIO</div>
                   <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#64748b', letterSpacing: '0.5px' }}>School Management System</div>

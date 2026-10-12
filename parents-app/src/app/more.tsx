@@ -1,32 +1,29 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal, useColorScheme } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { supabase } from '../services/supabase';
 import ParentLayout from '../../components/ParentLayout';
 import { useAppTheme } from '../context/ThemeContext';
 import { useTheme } from '@/hooks/use-theme';
+import { useStudent } from '../context/StudentContext';
 
 export default function MoreScreen() {
   const [activeTab, setActiveTab] = useState<'Home' | 'Academics' | 'Fees' | 'Messages' | 'More'>('More');
   const [isLoading, setIsLoading] = useState(true);
   const theme = useTheme();
 
+  // Consume global student context
+  const { setSelectedStudent, linkedStudents, loadingStudents } = useStudent();
+
   const [userProfile, setUserProfile] = useState<{
     fullName: string;
     email: string;
     role: string;
   } | null>(null);
-  const [childrenList, setChildrenList] = useState<Array<{
-    id: string;
-    name: string;
-    className: string;
-    studentId: string;
-  }>>([]);
 
   const { themePreference, setThemePreference } = useAppTheme();
   const [isThemeModalVisible, setIsThemeModalVisible] = useState(false);
-  const systemColorScheme = useColorScheme();
 
   const router = useRouter();
 
@@ -69,26 +66,8 @@ export default function MoreScreen() {
         email: user.email || 'N/A',
         role: profileData?.role || user.user_metadata?.role || 'Parent / Guardian',
       });
-
-      const { data: studentsData, error: studentsError } = await supabase
-        .from('students')
-        .select('*')
-        .eq('parent_id', user.id);
-
-      if (!studentsError && studentsData && studentsData.length > 0) {
-        setChildrenList(
-          studentsData.map((child: any) => ({
-            id: child.id || Math.random().toString(),
-            name: child.full_name || child.name || 'N/A',
-            className: child.class_name || child.grade || 'N/A',
-            studentId: child.student_id || child.id || 'N/A',
-          }))
-        );
-      } else {
-        setChildrenList([]);
-      }
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching user data:', error);
     } finally {
       setIsLoading(false);
     }
@@ -111,7 +90,7 @@ export default function MoreScreen() {
     }
   };
 
-  if (isLoading) {
+  if (isLoading || loadingStudents) {
     return (
       <ParentLayout activeTab={activeTab} onTabPress={handleTabPress}>
         <View style={[styles.loaderContainer, { backgroundColor: theme.background }]}>
@@ -126,8 +105,8 @@ export default function MoreScreen() {
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <Text style={[styles.screenTitle, { color: theme.text }]}>More</Text>
 
-        {/* Profile Card */}
-        <TouchableOpacity style={styles.profileCard}>
+        {/* Profile Card (Linked to Profile Settings) */}
+        <TouchableOpacity style={styles.profileCard} onPress={() => router.push('/profile-settings' as any)}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatarPlaceholder} />
           </View>
@@ -136,23 +115,39 @@ export default function MoreScreen() {
             <Text style={styles.profileRole}>{userProfile?.role || 'Parent / Guardian'}</Text>
             <Text style={styles.profileEmail}>{userProfile?.email || 'N/A'}</Text>
           </View>
-          <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
+          <Ionicons name="chevron-forward" size={20} color="#cbd5e1" />
         </TouchableOpacity>
 
         {/* My Children Section */}
         <View style={styles.sectionContainer}>
           <Text style={[styles.sectionHeader, { color: theme.tint }]}>My Children</Text>
           <View style={[styles.cardGroup, { backgroundColor: theme.card, borderColor: theme.border }]}>
-            {childrenList.length > 0 ? (
-              childrenList.map((child, index) => (
+            {linkedStudents.length > 0 ? (
+              linkedStudents.map((child, index) => (
                 <React.Fragment key={child.id}>
                   {index > 0 && <View style={[styles.divider, { backgroundColor: theme.border }]} />}
-                  <TouchableOpacity style={styles.menuRow}>
-                    <View style={styles.childAvatarPlaceholder} />
+                  <TouchableOpacity 
+                    style={styles.menuRow}
+                    onPress={() => {
+                      setSelectedStudent(child);
+                      router.replace('/parent-dashboard' as any);
+                    }}
+                  >
+                    <View style={styles.childAvatarContainer}>
+                      {child.avatarUrl ? (
+                        <Image source={{ uri: child.avatarUrl }} style={{ width: '100%', height: '100%' }} />
+                      ) : (
+                        <Text style={{ fontWeight: 'bold', color: '#64748b', fontSize: 13 }}>
+                          {child.firstName.slice(0, 1)}{child.lastName.slice(0, 1)}
+                        </Text>
+                      )}
+                    </View>
                     <View style={styles.menuRowText}>
-                      <Text style={[styles.menuRowTitle, { color: theme.text }]}>{child.name}</Text>
+                      <Text style={[styles.menuRowTitle, { color: theme.text }]}>
+                        {child.firstName} {child.lastName}
+                      </Text>
                       <Text style={[styles.menuRowSubtitle, { color: theme.textSecondary }]}>
-                        {child.className} • ID: {child.studentId}
+                        {child.className} • ID: {child.customId}
                       </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
@@ -171,7 +166,7 @@ export default function MoreScreen() {
         <View style={styles.sectionContainer}>
           <Text style={[styles.sectionHeader, { color: theme.tint }]}>Services</Text>
           <View style={[styles.cardGroup, { backgroundColor: theme.card, borderColor: theme.border }]}>
-            <TouchableOpacity style={styles.menuRow}>
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/attendance' as any)}>
               <View style={[styles.iconBox, { backgroundColor: '#eff6ff' }]}>
                 <Ionicons name="calendar-outline" size={20} color="#2563eb" />
               </View>
@@ -184,26 +179,26 @@ export default function MoreScreen() {
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            <TouchableOpacity style={styles.menuRow}>
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/academics' as any)}>
               <View style={[styles.iconBox, { backgroundColor: '#f0fdf4' }]}>
                 <Ionicons name="today-outline" size={20} color="#16a34a" />
               </View>
               <View style={styles.menuRowText}>
-                <Text style={[styles.menuRowTitle, { color: theme.text }]}>School Calendar</Text>
-                <Text style={[styles.menuRowSubtitle, { color: theme.textSecondary }]}>View upcoming school activities and dates.</Text>
+                <Text style={[styles.menuRowTitle, { color: theme.text }]}>Academic Performance</Text>
+                <Text style={[styles.menuRowSubtitle, { color: theme.textSecondary }]}>View grades and subject scores.</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
             </TouchableOpacity>
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            <TouchableOpacity style={styles.menuRow}>
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/fees' as any)}>
               <View style={[styles.iconBox, { backgroundColor: '#fff7ed' }]}>
                 <Ionicons name="folder-outline" size={20} color="#ea580c" />
               </View>
               <View style={styles.menuRowText}>
-                <Text style={[styles.menuRowTitle, { color: theme.text }]}>Documents</Text>
-                <Text style={[styles.menuRowSubtitle, { color: theme.textSecondary }]}>Access reports, receipts, and records.</Text>
+                <Text style={[styles.menuRowTitle, { color: theme.text }]}>School Fees & Payments</Text>
+                <Text style={[styles.menuRowSubtitle, { color: theme.textSecondary }]}>Access receipts and billing records.</Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
             </TouchableOpacity>
@@ -214,7 +209,9 @@ export default function MoreScreen() {
         <View style={styles.sectionContainer}>
           <Text style={[styles.sectionHeader, { color: theme.tint }]}>Account & Preferences</Text>
           <View style={[styles.cardGroup, { backgroundColor: theme.card, borderColor: theme.border }]}>
-            <TouchableOpacity style={styles.menuRow}>
+            
+            {/* Profile Settings Link */}
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/profile-settings' as any)}>
               <Ionicons name="person-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <Text style={[styles.standardMenuText, { color: theme.text }]}>Profile Settings</Text>
               <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
@@ -222,7 +219,8 @@ export default function MoreScreen() {
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            <TouchableOpacity style={styles.menuRow}>
+            {/* Notification Preferences Link */}
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/notifications' as any)}>
               <Ionicons name="notifications-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <Text style={[styles.standardMenuText, { color: theme.text }]}>Notification Preferences</Text>
               <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
@@ -244,7 +242,8 @@ export default function MoreScreen() {
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            <TouchableOpacity style={styles.menuRow}>
+            {/* Security Link */}
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/security' as any)}>
               <Ionicons name="lock-closed-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <Text style={[styles.standardMenuText, { color: theme.text }]}>Security</Text>
               <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
@@ -252,7 +251,8 @@ export default function MoreScreen() {
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            <TouchableOpacity style={styles.menuRow}>
+            {/* Help & Support Link */}
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/support' as any)}>
               <Ionicons name="help-circle-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <Text style={[styles.standardMenuText, { color: theme.text }]}>Help & Support</Text>
               <Ionicons name="chevron-forward" size={18} color="#cbd5e1" />
@@ -267,7 +267,7 @@ export default function MoreScreen() {
           </View>
           <Text style={[styles.helpTitle, { color: theme.text }]}>Need help?</Text>
           <Text style={[styles.helpSubtitle, { color: theme.textSecondary }]}>Contact the school support team for any inquiries or assistance.</Text>
-          <TouchableOpacity style={styles.supportButton}>
+          <TouchableOpacity style={styles.supportButton} onPress={() => router.push('/support' as any)}>
             <Ionicons name="chatbubble-outline" size={16} color="#ffffff" style={{ marginRight: 8 }} />
             <Text style={styles.supportButtonText}>Contact Support</Text>
           </TouchableOpacity>
@@ -336,6 +336,9 @@ const styles = StyleSheet.create({
   container: {
     padding: 16,
     paddingBottom: 40,
+    maxWidth: 600,
+    width: '100%',
+    alignSelf: 'center',
   },
   loaderContainer: {
     flex: 1,
@@ -408,12 +411,15 @@ const styles = StyleSheet.create({
     marginLeft: 14,
     marginRight: 14,
   },
-  childAvatarPlaceholder: {
+  childAvatarContainer: {
     width: 40,
     height: 40,
     borderRadius: 20,
     backgroundColor: '#e2e8f0',
     marginRight: 12,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   menuRowText: {
     flex: 1,

@@ -12,9 +12,11 @@ import {
   ScrollView,
   ActivityIndicator
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { supabase } from '../services/supabase';
 
-function LoginScreen({ navigation }: { navigation: any }) {
+export default function LoginScreen() {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -55,9 +57,9 @@ function LoginScreen({ navigation }: { navigation: any }) {
       const role = profileData?.role || user.user_metadata?.role || 'Parent';
 
       if (role === 'Parent') {
-        navigation.replace('parent-dashboard');
+        router.replace('/parent-dashboard');
       } else {
-        navigation.replace('parent-dashboard');
+        router.replace('/parent-dashboard');
       }
 
     } catch (error: any) {
@@ -398,5 +400,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 });
-
-export default LoginScreen;

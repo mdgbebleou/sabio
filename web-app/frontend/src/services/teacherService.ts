@@ -475,6 +475,8 @@ export interface MyProfile {
   employmentStatus: string | null;
   office: string | null;
   officeHours: string | null;
+  mustChangePassword: boolean;
+  passwordChangedAt: string | null;
 }
 
 const mapMyProfile = (r: Row): MyProfile => ({
@@ -500,13 +502,15 @@ const mapMyProfile = (r: Row): MyProfile => ({
   employmentStatus: (r.employment_status as string) || null,
   office: (r.office as string) || null,
   officeHours: (r.office_hours as string) || null,
+  mustChangePassword: !!r.must_change_password,
+  passwordChangedAt: (r.password_changed_at as string) || null,
 });
 
 export async function getMyProfile(): Promise<MyProfile> {
   const uid = await currentUserId();
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, email, role, status, first_name, last_name, middle_name, full_name, custom_id, primary_phone, alternate_phone, address, avatar_url, assign_class, gender, date_of_birth, position, employment_status, office, office_hours')
+    .select('id, email, role, status, first_name, last_name, middle_name, full_name, custom_id, primary_phone, alternate_phone, address, avatar_url, assign_class, gender, date_of_birth, position, employment_status, office, office_hours, must_change_password, password_changed_at')
     .eq('id', uid)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -551,7 +555,7 @@ export async function updateMyProfile(patch: MyProfileUpdate): Promise<MyProfile
         office_hours: patch.officeHours?.trim() || null,
       })
       .eq('id', uid)
-      .select('id, email, role, status, first_name, last_name, middle_name, full_name, custom_id, primary_phone, alternate_phone, address, avatar_url, assign_class, gender, date_of_birth, position, employment_status, office, office_hours')
+      .select('id, email, role, status, first_name, last_name, middle_name, full_name, custom_id, primary_phone, alternate_phone, address, avatar_url, assign_class, gender, date_of_birth, position, employment_status, office, office_hours, must_change_password, password_changed_at')
       .single()
   );
   return mapMyProfile(row);
@@ -560,6 +564,14 @@ export async function updateMyProfile(patch: MyProfileUpdate): Promise<MyProfile
 export async function updateMyPassword(newPassword: string): Promise<void> {
   const { error } = await supabase.auth.updateUser({ password: newPassword });
   if (error) throw new Error(error.message);
+  const uid = await currentUserId();
+  await supabase
+    .from('profiles')
+    .update({
+      must_change_password: false,
+      password_changed_at: new Date().toISOString(),
+    })
+    .eq('id', uid);
 }
 // ---------- messages ----------
 
@@ -2636,3 +2648,5 @@ export async function markInvoiceSent(feeId: string): Promise<void> {
     .eq('id', feeId);
   if (error) throw new Error(error.message);
 }
+
+

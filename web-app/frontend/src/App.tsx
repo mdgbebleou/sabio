@@ -1,7 +1,8 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+﻿import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 
 // Public Pages
 import { Login } from './pages/Login';
+import { ChangePassword } from './pages/ChangePassword';
 
 // Admin Pages
 import { Dashboard } from './pages/Dashboard';
@@ -48,6 +49,7 @@ export function App() {
       <Routes>
         {/* PUBLIC ROUTE */}
         <Route path="/login" element={<Login />} />
+        <Route path="/change-password" element={<ChangePassword />} />
 
         {/* ADMIN PORTAL ROUTES */}
         <Route path="/dashboard" element={<Dashboard />} />
@@ -96,3 +98,4 @@ export function App() {
 }
 
 export default App;
+

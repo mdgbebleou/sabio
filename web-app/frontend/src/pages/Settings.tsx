@@ -2,23 +2,128 @@ import React, { useState, useEffect } from 'react';
 import { AdminLayout } from '../components/AdminLayout';
 import { supabase } from '../services/supabase';
 
+interface PeriodItem {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  status: 'Active' | 'Upcoming' | 'Completed';
+}
+
+interface AcademicTermDbRecord {
+  id?: string;
+  academic_year: string;
+  term_name: string;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+}
+
 export const Settings: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'profile' | 'security' | 'academic' | 'finance' | 'attendance' | 'students'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'profile' | 'security' | 'academic' | 'finance' | 'attendance'>('overview');
   const [showImpactModal, setShowImpactModal] = useState(false);
-  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
 
-  // Form states for adding student and linking parent
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [className, setClassName] = useState('Grade 10');
-  const [parentSearchQuery, setParentSearchQuery] = useState('');
-  const [parentResults, setParentResults] = useState<Array<{ id: string; first_name?: string; last_name?: string; full_name?: string; email?: string }>>([]);
-  const [selectedParent, setSelectedParent] = useState<{ id: string; name: string; email: string } | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Two-step deletion modal state
+  const [periodToDelete, setPeriodToDelete] = useState<{ id: string; name: string } | null>(null);
 
-  // Dynamic student list state loaded strictly from Supabase (Zero hardcoded data)
-  const [studentsList, setStudentsList] = useState<Array<any>>([]);
-  const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+  // Academic Structure State (Term vs Semester)
+  const [structureType, setStructureType] = useState<'term' | 'semester'>('term');
+  const [academicYear, setAcademicYear] = useState('2026/2027');
+
+  // Dynamic terms or semesters list
+  const [periods, setPeriods] = useState<PeriodItem[]>([
+    { id: '1', name: 'Term 1', startDate: '2026-09-01', endDate: '2026-12-18', status: 'Active' },
+    { id: '2', name: 'Term 2', startDate: '2027-01-04', endDate: '2027-03-26', status: 'Upcoming' },
+    { id: '3', name: 'Term 3', startDate: '2027-04-12', endDate: '2027-06-30', status: 'Upcoming' },
+  ]);
+
+  const handleStructureChange = (type: 'term' | 'semester') => {
+    setStructureType(type);
+    if (type === 'term') {
+      setPeriods([
+        { id: '1', name: 'Term 1', startDate: '2026-09-01', endDate: '2026-12-18', status: 'Active' },
+        { id: '2', name: 'Term 2', startDate: '2027-01-04', endDate: '2027-03-26', status: 'Upcoming' },
+        { id: '3', name: 'Term 3', startDate: '2027-04-12', endDate: '2027-06-30', status: 'Upcoming' },
+      ]);
+    } else {
+      setPeriods([
+        { id: '1', name: 'Semester 1', startDate: '2026-09-01', endDate: '2027-01-22', status: 'Active' },
+        { id: '2', name: 'Semester 2', startDate: '2027-02-01', endDate: '2027-06-30', status: 'Upcoming' },
+      ]);
+    }
+  };
+
+  const handleAddPeriod = () => {
+    const nextNumber = periods.length + 1;
+    const prefix = structureType === 'term' ? 'Term' : 'Semester';
+    const newPeriod: PeriodItem = {
+      id: Date.now().toString(),
+      name: `${prefix} ${nextNumber}`,
+      startDate: new Date().toISOString().split('T')[0],
+      endDate: new Date().toISOString().split('T')[0],
+      status: 'Upcoming'
+    };
+    setPeriods([...periods, newPeriod]);
+  };
+
+  const confirmDeletePeriod = () => {
+    if (!periodToDelete) return;
+    setPeriods(periods.filter(p => p.id !== periodToDelete.id));
+    setPeriodToDelete(null);
+  };
+
+  // Real Supabase Save Handler for Academic Configuration
+  const handleSaveConfiguration = async () => {
+    try {
+      const recordsToSave: AcademicTermDbRecord[] = periods.map((p) => ({
+        academic_year: academicYear,
+        term_name: p.name,
+        start_date: p.startDate,
+        end_date: p.endDate,
+        is_active: p.status === 'Active'
+      }));
+
+      const { error } = await supabase
+        .from('academic_terms')
+        .upsert(recordsToSave, { onConflict: 'academic_year,term_name' });
+
+      if (error) {
+        console.error('Error saving academic terms:', error);
+        alert('Failed to save configuration: ' + error.message);
+      } else {
+        setShowImpactModal(false);
+        alert('Academic structure saved successfully to database!');
+      }
+    } catch (err) {
+      console.error('Unexpected error saving configuration:', err);
+      alert('An unexpected error occurred while saving.');
+    }
+  };
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const { data, error } = await supabase.from('academic_terms').select('*');
+        if (!error && data && data.length > 0) {
+          const formattedPeriods: PeriodItem[] = data.map((item: AcademicTermDbRecord & { id?: string }, index: number) => ({
+            id: item.id || index.toString(),
+            name: item.term_name,
+            startDate: item.start_date,
+            endDate: item.end_date,
+            status: item.is_active ? 'Active' : 'Upcoming'
+          }));
+          setPeriods(formattedPeriods);
+          if (data[0].academic_year) {
+            setAcademicYear(data[0].academic_year);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching academic terms:', err);
+      }
+    };
+
+    fetchSettings();
+  }, []);
 
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',
@@ -40,99 +145,6 @@ export const Settings: React.FC = () => {
     boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', overflow: 'hidden', fontFamily: "'Inter', sans-serif"
   };
 
-  const generateSecureStudentId = () => {
-    const randomHex = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const randomNum = Math.floor(1000 + Math.random() * 9000);
-    return `STU-${randomHex}-${randomNum}`;
-  };
-
-  useEffect(() => {
-    if (activeTab === 'students') {
-      fetchStudents();
-    }
-  }, [activeTab]);
-
-  const fetchStudents = async () => {
-    try {
-      setIsLoadingStudents(true);
-      const { data, error } = await supabase
-        .from('students')
-        .select('id, custom_id, first_name, last_name, class_name, status, profiles:parent_id(full_name, email)');
-
-      if (error) throw error;
-      setStudentsList(data || []);
-    } catch (err) {
-      console.error('Error fetching students:', err);
-      setStudentsList([]);
-    } finally {
-      setIsLoadingStudents(false);
-    }
-  };
-
-  const searchParents = async (query: string) => {
-    setParentSearchQuery(query);
-    if (!query || query.trim().length < 2) {
-      setParentResults([]);
-      return;
-    }
-
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, first_name, last_name, full_name, email')
-        .or(`first_name.ilike.%${query}%,last_name.ilike.%${query}%,email.ilike.%${query}%`)
-        .limit(5);
-
-      if (!error && data) {
-        setParentResults(data);
-      }
-    } catch (err) {
-      console.error('Error searching parents:', err);
-    }
-  };
-
-  const handleSaveStudent = async () => {
-    if (!firstName || !lastName || !selectedParent) {
-      alert('Please fill in all required fields and select a parent/guardian.');
-      return;
-    }
-
-    try {
-      setIsSubmitting(true);
-      const studentId = generateSecureStudentId();
-
-      const { error } = await supabase
-        .from('students')
-        .insert([
-          {
-            custom_id: studentId,
-            first_name: firstName.trim(),
-            last_name: lastName.trim(),
-            class_name: className,
-            parent_id: selectedParent.id,
-            status: 'Active Enrolled',
-            academictrend: 'flat',
-            engagement: 'Moderate',
-          }
-        ]);
-
-      if (error) throw error;
-
-      alert('Student successfully enrolled and linked to parent.');
-      setShowAddStudentModal(false);
-      setFirstName('');
-      setLastName('');
-      setSelectedParent(null);
-      setParentSearchQuery('');
-      fetchStudents();
-    } catch (err: any) {
-      console.error('Failed to save student:', err.message);
-      alert('Failed to save student: ' + err.message);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   return (
     <AdminLayout>
       <div style={{ padding: 'clamp(16px, 3vw, 30px)', maxWidth: '1600px', margin: '0 auto', fontFamily: "'Inter', sans-serif" }}>
@@ -142,17 +154,11 @@ export const Settings: React.FC = () => {
           <div>
             <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.5px' }}>School Settings</h1>
             <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>
-              Configure school information, academic rules, financial settings, grading, attendance, security preferences, and student enrollment.
+              Configure school information, academic structures, financial settings, grading, attendance, and security preferences.
             </p>
           </div>
 
           <div style={{ display: 'flex', gap: '10px' }}>
-            <button 
-              onClick={() => setShowAddStudentModal(true)} 
-              style={{ padding: '8px 18px', borderRadius: '10px', border: 'none', backgroundColor: '#16a34a', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}
-            >
-              + Add Student & Link Parent
-            </button>
             <button style={{ padding: '8px 16px', borderRadius: '10px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
               Discard Changes
             </button>
@@ -174,11 +180,10 @@ export const Settings: React.FC = () => {
             { id: 'finance', label: 'Fee & Finance' },
             { id: 'attendance', label: 'Attendance & Communication' },
             { id: 'security', label: 'Preferences & Security' },
-            { id: 'students', label: 'Student Management' },
           ].map(tab => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
+              onClick={() => setActiveTab(tab.id as 'overview' | 'profile' | 'security' | 'academic' | 'finance' | 'attendance')}
               style={{
                 padding: '10px 18px',
                 border: 'none',
@@ -196,9 +201,7 @@ export const Settings: React.FC = () => {
           ))}
         </div>
 
-        {/* ========================================================================= */}
-        {/* SUB-PAGE 1: OVERVIEW & HEALTH */}
-        {/* ========================================================================= */}
+        {/* OVERVIEW TAB */}
         {activeTab === 'overview' && (
           <div>
             <div style={{ ...cardStyle, backgroundColor: '#f8fafc', marginBottom: '24px' }}>
@@ -217,22 +220,18 @@ export const Settings: React.FC = () => {
                   <span style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>SCHOOL PROFILE</span>
                   <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#166534', marginTop: '4px' }}>Configured</div>
                 </div>
-
                 <div style={{ backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px' }}>
                   <span style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>ACADEMIC CAL</span>
                   <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#166534', marginTop: '4px' }}>Configured</div>
                 </div>
-
                 <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px', padding: '12px' }}>
                   <span style={{ fontSize: '10px', fontWeight: '800', color: '#991b1b', textTransform: 'uppercase' }}>FEE CONFIG</span>
                   <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#dc2626', marginTop: '4px' }}>Attention Req.</div>
                 </div>
-
                 <div style={{ backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px' }}>
                   <span style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>GRADING SCALE</span>
                   <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#166534', marginTop: '4px' }}>Configured</div>
                 </div>
-
                 <div style={{ backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px' }}>
                   <span style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>ATTENDANCE</span>
                   <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#166534', marginTop: '4px' }}>Configured</div>
@@ -241,19 +240,18 @@ export const Settings: React.FC = () => {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', alignItems: 'start' }}>
-              
               <div style={cardStyle}>
                 <h3 style={{ margin: '0 0 6px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>School Profile</h3>
                 <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#64748b' }}>Basic info, logo, contact details, and institutional identity.</p>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
-                  <span style={{ fontSize: '11px', color: '#64748b' }}>Updated 2d ago</span>
+                  <span style={{ fontSize: '11px', color: '#64748b' }}>Updated recently</span>
                   <button onClick={() => setActiveTab('profile')} style={{ border: 'none', background: 'none', color: '#1e40af', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>Manage -&gt;</button>
                 </div>
               </div>
 
               <div style={cardStyle}>
                 <h3 style={{ margin: '0 0 6px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Academic & Grading</h3>
-                <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#64748b' }}>Promotion rules, operational terms, and letter scales.</p>
+                <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#64748b' }}>Promotion rules, operational terms or semesters, and scales.</p>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
                   <span style={{ fontSize: '11px', color: '#64748b' }}>A-F Standard</span>
                   <button onClick={() => setActiveTab('academic')} style={{ border: 'none', background: 'none', color: '#1e40af', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>Manage -&gt;</button>
@@ -277,20 +275,16 @@ export const Settings: React.FC = () => {
                   <button onClick={() => setActiveTab('attendance')} style={{ border: 'none', background: 'none', color: '#1e40af', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>Manage -&gt;</button>
                 </div>
               </div>
-
             </div>
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* SUB-PAGE 2: SCHOOL PROFILE & IDENTITY */}
-        {/* ========================================================================= */}
+        {/* PROFILE TAB */}
         {activeTab === 'profile' && (
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', alignItems: 'start' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div style={cardStyle}>
                 <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Institutional Identity</h3>
-
                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center', marginBottom: '20px', paddingBottom: '16px', borderBottom: '1px solid #e2e8f0' }}>
                   <div style={{ width: '80px', height: '80px', borderRadius: '12px', backgroundColor: '#f1f5f9', border: '1px dashed #cbd5e1', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#64748b', fontSize: '10px' }}>
                     OFFICIAL LOGO
@@ -329,26 +323,6 @@ export const Settings: React.FC = () => {
                   </div>
                 </div>
               </div>
-
-              <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Contact & Location</h3>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Official Email</label>
-                    <input type="email" defaultValue="admin@sabio.edu.gh" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Primary Phone</label>
-                    <input type="text" defaultValue="+233 30 200 1234" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Street Address</label>
-                  <input type="text" defaultValue="Achimota District, Main Bypass Road" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                </div>
-              </div>
             </div>
 
             <div style={cardStyle}>
@@ -356,43 +330,62 @@ export const Settings: React.FC = () => {
               <div style={{ border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px', backgroundColor: '#f8fafc', fontSize: '11px' }}>
                 <strong style={{ fontSize: '14px', color: '#002b49', display: 'block' }}>SABIO ACADEMY ACHIMOTA</strong>
                 <span style={{ color: '#64748b', display: 'block', marginTop: '2px' }}>LIN-4421-A | admin@sabio.edu.gh</span>
-                <span style={{ color: '#64748b', display: 'block' }}>Achimota District, Greater Accra Region</span>
               </div>
             </div>
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* SUB-PAGE 3: ACADEMIC & GRADING CONFIGURATION */}
-        {/* ========================================================================= */}
+        {/* ACADEMIC TAB */}
         {activeTab === 'academic' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-              
               <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Current Academic Year</h3>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Academic Cycle Structure</h3>
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '6px' }}>System Architecture Mode</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <button
+                      onClick={() => handleStructureChange('term')}
+                      style={{
+                        padding: '10px', borderRadius: '8px',
+                        border: structureType === 'term' ? '2px solid #002b49' : '1px solid #cbd5e1',
+                        backgroundColor: structureType === 'term' ? '#f0f9ff' : '#ffffff',
+                        color: structureType === 'term' ? '#002b49' : '#334155',
+                        fontWeight: 'bold', fontSize: '12px', cursor: 'pointer'
+                      }}
+                    >
+                      Three-Term System (3 Terms)
+                    </button>
+                    <button
+                      onClick={() => handleStructureChange('semester')}
+                      style={{
+                        padding: '10px', borderRadius: '8px',
+                        border: structureType === 'semester' ? '2px solid #002b49' : '1px solid #cbd5e1',
+                        backgroundColor: structureType === 'semester' ? '#f0f9ff' : '#ffffff',
+                        color: structureType === 'semester' ? '#002b49' : '#334155',
+                        fontWeight: 'bold', fontSize: '12px', cursor: 'pointer'
+                      }}
+                    >
+                      Two-Semester System (2 Semesters)
+                    </button>
+                  </div>
+                </div>
+
                 <div style={{ marginBottom: '12px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Year Designation</label>
-                  <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Academic Year Designation</label>
+                  <select 
+                    value={academicYear} 
+                    onChange={(e) => setAcademicYear(e.target.value)}
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', backgroundColor: '#ffffff' }}
+                  >
                     <option>2026/2027</option>
                     <option>2025/2026</option>
                   </select>
                 </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Start Date</label>
-                    <input type="text" defaultValue="09/01/2026" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>End Date</label>
-                    <input type="text" defaultValue="06/30/2027" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                  </div>
-                </div>
               </div>
 
               <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Promotion Rules</h3>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Promotion & Grading Rules</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
                   <div>
                     <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Minimum GPA Required</label>
@@ -403,85 +396,107 @@ export const Settings: React.FC = () => {
                     <input type="text" defaultValue="2" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
                   </div>
                 </div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>
-                  <input type="checkbox" defaultChecked /> Require administrative approval for borderline cases
-                </label>
               </div>
-
             </div>
 
-            {/* TERM CONFIGURATION TABLE */}
             <div style={cardStyle}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Term Configuration</h3>
-                <button style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '11px', fontWeight: 'bold', color: '#0f172a', cursor: 'pointer' }}>+ Add Term</button>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>
+                    {structureType === 'term' ? 'Term Breakdown Metadata' : 'Semester Breakdown Metadata'}
+                  </h3>
+                  <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#64748b' }}>
+                    Configure exact structural date ranges and active operational period for the current year.
+                  </p>
+                </div>
+                <button 
+                  onClick={handleAddPeriod}
+                  style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '11px', fontWeight: 'bold', color: '#0f172a', cursor: 'pointer' }}
+                >
+                  + Add Period
+                </button>
               </div>
 
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '10px', fontWeight: '800' }}>
-                    <th style={{ padding: '10px' }}>TERM NAME</th>
+                    <th style={{ padding: '10px' }}>PERIOD NAME</th>
                     <th style={{ padding: '10px' }}>START DATE</th>
                     <th style={{ padding: '10px' }}>END DATE</th>
                     <th style={{ padding: '10px' }}>STATUS</th>
+                    <th style={{ padding: '10px', textAlign: 'right' }}>ACTIONS</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '10px', fontWeight: 'bold' }}>First Term (Fall)</td>
-                    <td style={{ padding: '10px' }}>Sep 1, 2026</td>
-                    <td style={{ padding: '10px' }}>Dec 18, 2026</td>
-                    <td style={{ padding: '10px' }}><span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold' }}>Active</span></td>
-                  </tr>
-                  <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '10px', fontWeight: 'bold' }}>Second Term (Winter)</td>
-                    <td style={{ padding: '10px' }}>Jan 4, 2027</td>
-                    <td style={{ padding: '10px' }}>Mar 26, 2027</td>
-                    <td style={{ padding: '10px' }}><span style={{ backgroundColor: '#f1f5f9', color: '#475569', padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold' }}>Upcoming</span></td>
-                  </tr>
+                  {periods.map((p) => (
+                    <tr key={p.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '10px', fontWeight: 'bold' }}>{p.name}</td>
+                      <td style={{ padding: '10px' }}>
+                        <input 
+                          type="date" 
+                          value={p.startDate} 
+                          onChange={(e) => {
+                            const updated = periods.map(item => item.id === p.id ? { ...item, startDate: e.target.value } : item);
+                            setPeriods(updated);
+                          }} 
+                          style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '11px' }} 
+                        />
+                      </td>
+                      <td style={{ padding: '10px' }}>
+                        <input 
+                          type="date" 
+                          value={p.endDate} 
+                          onChange={(e) => {
+                            const updated = periods.map(item => item.id === p.id ? { ...item, endDate: e.target.value } : item);
+                            setPeriods(updated);
+                          }} 
+                          style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '11px' }} 
+                        />
+                      </td>
+                      <td style={{ padding: '10px' }}>
+                        <select 
+                          value={p.status}
+                          onChange={(e) => {
+                            const updated = periods.map(item => item.id === p.id ? { ...item, status: e.target.value as PeriodItem['status'] } : item);
+                            setPeriods(updated);
+                          }}
+                          style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '11px', backgroundColor: '#fff' }}
+                        >
+                          <option value="Active">Active</option>
+                          <option value="Upcoming">Upcoming</option>
+                          <option value="Completed">Completed</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: '10px', textAlign: 'right' }}>
+                        <button 
+                          onClick={() => setPeriodToDelete({ id: p.id, name: p.name })}
+                          style={{ border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* SUB-PAGE 4: FEE & FINANCE SETTINGS */}
-        {/* ========================================================================= */}
+        {/* FINANCE TAB */}
         {activeTab === 'finance' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', alignItems: 'start' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Currency Config</h3>
-                <div style={{ marginBottom: '12px' }}>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Base Currency</label>
-                  <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                    <option>GHS - Ghanaian Cedi</option>
-                    <option>USD - US Dollar</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Display Symbol</label>
-                  <input type="text" defaultValue="GH₵" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
-                </div>
+            <div style={cardStyle}>
+              <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Currency Config</h3>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Base Currency</label>
+                <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
+                  <option>GHS - Ghanaian Cedi</option>
+                </select>
               </div>
-
-              <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Financial Control</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '12px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Require Payment Verification</span>
-                    <input type="checkbox" defaultChecked />
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Require Refund Approval</span>
-                    <input type="checkbox" defaultChecked />
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Automated Receipt Generation</span>
-                    <input type="checkbox" />
-                  </label>
-                </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Display Symbol</label>
+                <input type="text" defaultValue="GHS" style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} />
               </div>
             </div>
 
@@ -493,15 +508,7 @@ export const Settings: React.FC = () => {
                   <span style={{ fontSize: '10px', color: '#166534', fontWeight: 'bold' }}>ACTIVE</span>
                 </div>
                 <div style={{ border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px', backgroundColor: '#f8fafc' }}>
-                  <strong style={{ fontSize: '12px', color: '#0f172a', display: 'block' }}>Bank Transfer</strong>
-                  <span style={{ fontSize: '10px', color: '#166534', fontWeight: 'bold' }}>ACTIVE</span>
-                </div>
-                <div style={{ border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px', backgroundColor: '#f8fafc' }}>
                   <strong style={{ fontSize: '12px', color: '#0f172a', display: 'block' }}>Mobile Money</strong>
-                  <span style={{ fontSize: '10px', color: '#dc2626', fontWeight: 'bold' }}>INACTIVE</span>
-                </div>
-                <div style={{ border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px', backgroundColor: '#f8fafc' }}>
-                  <strong style={{ fontSize: '12px', color: '#0f172a', display: 'block' }}>Credit Card</strong>
                   <span style={{ fontSize: '10px', color: '#166534', fontWeight: 'bold' }}>ACTIVE</span>
                 </div>
               </div>
@@ -509,318 +516,65 @@ export const Settings: React.FC = () => {
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* SUB-PAGE 5: ATTENDANCE & COMMUNICATION */}
-        {/* ========================================================================= */}
+        {/* ATTENDANCE TAB */}
         {activeTab === 'attendance' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Threshold Configuration</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                  <div>
-                    <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#334155' }}>MINIMUM (%)</label>
-                    <input type="number" defaultValue={80} style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '2px', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#334155' }}>WARNING (%)</label>
-                    <input type="number" defaultValue={85} style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '2px', boxSizing: 'border-box' }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#334155' }}>CRITICAL (%)</label>
-                    <input type="number" defaultValue={70} style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', fontSize: '12px', marginTop: '2px', boxSizing: 'border-box' }} />
-                  </div>
-                </div>
-              </div>
-
-              <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Attendance Intelligence</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '12px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Low Attendance Alert</span>
-                    <input type="checkbox" defaultChecked />
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Critical Escalation Trigger</span>
-                    <input type="checkbox" defaultChecked />
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div style={cardStyle}>
-              <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Communication Setup</h3>
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>DEFAULT CHANNELS</label>
-                <div style={{ display: 'flex', gap: '12px', marginTop: '6px', fontSize: '12px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><input type="checkbox" defaultChecked /> Email</label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><input type="checkbox" defaultChecked /> In-App</label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><input type="checkbox" /> SMS</label>
-                </div>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Who can send global announcements?</label>
-                <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                  <option>Administrators Only</option>
-                  <option>Admins & Department Heads</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* SUB-PAGE 6: PREFERENCES & SECURITY */}
-        {/* ========================================================================= */}
-        {activeTab === 'security' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px', alignItems: 'start' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Regional Settings</h3>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>SYSTEM TIMEZONE</label>
-                    <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                      <option>Africa/Accra (GMT)</option>
-                      <option>UTC / Greenwich Mean Time</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>DATE FORMAT</label>
-                    <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                      <option>DD/MM/YYYY</option>
-                      <option>YYYY-MM-DD</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div style={cardStyle}>
-                <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Security Policy</h3>
-
-                <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px', marginBottom: '16px' }}>
-                  <div style={{ fontSize: '11px', fontWeight: '800', color: '#0f172a', textTransform: 'uppercase', marginBottom: '10px' }}>PASSWORD REQUIREMENTS</div>
-                  
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '10px' }}>
-                    <div>
-                      <label style={{ fontSize: '10px', color: '#64748b' }}>Minimum Length</label>
-                      <input type="number" defaultValue={12} style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '2px', boxSizing: 'border-box' }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '10px', color: '#64748b' }}>Expiry (Days)</label>
-                      <input type="number" defaultValue={90} style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '2px', boxSizing: 'border-box' }} />
-                    </div>
-                  </div>
-
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#334155', fontWeight: 'bold' }}>
-                    <input type="checkbox" defaultChecked /> Require Complexity (Uppercase, number, special char)
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div style={cardStyle}>
-              <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '800', color: '#0f172a' }}>Data & Audit</h3>
-              <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>
-                System logs and user actions are recorded under District Security Policy.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* SUB-PAGE 7: STUDENT MANAGEMENT & PARENT LINKING */}
-        {/* ========================================================================= */}
-        {activeTab === 'students' && (
           <div style={cardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Student Records & Parent Links</h3>
-              <button 
-                onClick={() => setShowAddStudentModal(true)} 
-                style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}
-              >
-                + Add New Student
-              </button>
-            </div>
-            <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '16px' }}>
-              Manage student enrollments and associate guardians securely via Supabase.
-            </p>
-
-            {isLoadingStudents ? (
-              <div style={{ padding: '20px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>Loading student records...</div>
-            ) : studentsList.length === 0 ? (
-              <div style={{ padding: '30px', textAlign: 'center', color: '#64748b', fontStyle: 'italic', fontSize: '12px', border: '1px dashed #cbd5e1', borderRadius: '10px' }}>
-                N/A (No student records found)
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Threshold Configuration</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ fontSize: '10px', fontWeight: 'bold', color: '#334155' }}>MINIMUM (%)</label>
+                <input type="number" defaultValue={80} style={{ width: '100%', padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '2px', boxSizing: 'border-box' }} />
               </div>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '10px', fontWeight: '800' }}>
-                    <th style={{ padding: '10px' }}>STUDENT ID</th>
-                    <th style={{ padding: '10px' }}>FULL NAME</th>
-                    <th style={{ padding: '10px' }}>CLASS</th>
-                    <th style={{ padding: '10px' }}>PARENT / GUARDIAN</th>
-                    <th style={{ padding: '10px' }}>STATUS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {studentsList.map((st) => (
-                    <tr key={st.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: '10px', fontWeight: 'bold', color: '#002b49' }}>{st.custom_id}</td>
-                      <td style={{ padding: '10px' }}>{st.first_name} {st.last_name}</td>
-                      <td style={{ padding: '10px' }}>{st.class_name}</td>
-                      <td style={{ padding: '10px' }}>{st.profiles?.full_name || st.profiles?.email || 'N/A'}</td>
-                      <td style={{ padding: '10px' }}>
-                        <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold' }}>
-                          {st.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            </div>
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* ADD STUDENT MODAL */}
-        {/* ========================================================================= */}
-        {showAddStudentModal && (
+        {/* SECURITY TAB */}
+        {activeTab === 'security' && (
+          <div style={cardStyle}>
+            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Regional Settings</h3>
+            <div>
+              <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>SYSTEM TIMEZONE</label>
+              <select style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
+                <option>Africa/Accra (GMT)</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* DELETION MODAL */}
+        {periodToDelete && (
           <div style={modalOverlayStyle}>
             <div style={modalContainerStyle}>
               <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Add New Student</h3>
-                <button onClick={() => setShowAddStudentModal(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#dc2626' }}>Confirm Period Deletion</h3>
+                <button onClick={() => setPeriodToDelete(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
               </div>
-
-              <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', maxHeight: '70vh', overflowY: 'auto' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>First Name *</label>
-                    <input 
-                      type="text" 
-                      placeholder="e.g. Dogbeda" 
-                      value={firstName} 
-                      onChange={(e) => setFirstName(e.target.value)} 
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Last Name *</label>
-                    <input 
-                      type="text" 
-                      placeholder="e.g. Gati" 
-                      value={lastName} 
-                      onChange={(e) => setLastName(e.target.value)} 
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Student ID (Auto-Generated)</label>
-                    <input 
-                      type="text" 
-                      disabled 
-                      placeholder="System will generate securely" 
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box', color: '#64748b' }} 
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Class / Grade *</label>
-                    <select 
-                      value={className} 
-                      onChange={(e) => setClassName(e.target.value)} 
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
-                    >
-                      <option>Grade 7</option>
-                      <option>Grade 8</option>
-                      <option>Grade 9</option>
-                      <option>Grade 10</option>
-                      <option>Grade 11</option>
-                      <option>Grade 12</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Parent / Guardian *</label>
-                  <input 
-                    type="text" 
-                    placeholder="Search by name or email..." 
-                    value={parentSearchQuery} 
-                    onChange={(e) => searchParents(e.target.value)} 
-                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
-                  />
-                  {selectedParent && (
-                    <div style={{ marginTop: '6px', fontSize: '11px', color: '#166534', backgroundColor: '#dcfce7', padding: '6px 10px', borderRadius: '6px' }}>
-                      Linked Guardian: <strong>{selectedParent.name}</strong> ({selectedParent.email})
-                    </div>
-                  )}
-                  {parentResults.length > 0 && !selectedParent && (
-                    <div style={{ border: '1px solid #cbd5e1', borderRadius: '8px', marginTop: '4px', backgroundColor: '#ffffff', maxHeight: '150px', overflowY: 'auto' }}>
-                      {parentResults.map((p) => {
-                        const displayName = p.full_name || `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'Unnamed Parent';
-                        return (
-                          <div 
-                            key={p.id} 
-                            onClick={() => {
-                              setSelectedParent({ id: p.id, name: displayName, email: p.email || 'N/A' });
-                              setParentResults([]);
-                              setParentSearchQuery(displayName);
-                            }}
-                            style={{ padding: '8px 12px', fontSize: '12px', cursor: 'pointer', borderBottom: '1px solid #f1f5f9' }}
-                          >
-                            <strong>{displayName}</strong> <span style={{ color: '#64748b' }}>({p.email || 'No email'})</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <span style={{ fontSize: '10px', color: '#64748b', display: 'block', marginTop: '4px' }}>
-                    Linking an existing guardian profile simplifies contact management.
-                  </span>
-                </div>
+              <div style={{ padding: '24px' }}>
+                <p style={{ fontSize: '12px', color: '#334155' }}>Are you sure you want to delete <strong>{periodToDelete.name}</strong>?</p>
               </div>
-
               <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button onClick={() => setShowAddStudentModal(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button 
-                  onClick={handleSaveStudent} 
-                  disabled={isSubmitting} 
-                  style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}
-                >
-                  {isSubmitting ? 'Saving...' : 'Save Student'}
-                </button>
+                <button onClick={() => setPeriodToDelete(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={confirmDeletePeriod} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#dc2626', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Yes, Delete</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* CHANGE REVIEW MODAL */}
-        {/* ========================================================================= */}
+        {/* IMPACT MODAL */}
         {showImpactModal && (
           <div style={modalOverlayStyle}>
             <div style={modalContainerStyle}>
               <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#dc2626' }}>High-Impact Configuration Change</h3>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#dc2626' }}>Save Academic Configuration</h3>
                 <button onClick={() => setShowImpactModal(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
               </div>
-
               <div style={{ padding: '24px' }}>
-                <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px', padding: '12px', marginBottom: '16px', fontSize: '11px', color: '#991b1b' }}>
-                  <strong>Warning:</strong> You are modifying academic rule thresholds. This will trigger a background recalculation of all historical GPAs tied to this scale across 1,248 student profiles.
-                </div>
+                <p style={{ fontSize: '12px', color: '#334155' }}>This will save your configured terms/semesters to the database and update your active academic schedule.</p>
               </div>
-
               <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button onClick={() => setShowImpactModal(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={() => setShowImpactModal(false)} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#dc2626', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Apply Change (Requires Auth)</button>
+                <button onClick={() => setShowImpactModal(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={handleSaveConfiguration} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '12px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>Confirm & Save</button>
               </div>
             </div>
           </div>

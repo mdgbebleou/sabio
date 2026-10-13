@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabase';
 
 interface AddUserModalProps {
@@ -150,7 +150,8 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, onU
         status: accountStatus,
         fee_account_status: 'Good Standing',
         engagement: 'Moderate',
-        custom_id: generatedId
+        custom_id: generatedId,
+        must_change_password: true
       };
 
       if (userId) {
@@ -389,3 +390,4 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({ isOpen, onClose, onU
     </div>
   );
 };
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../services/supabase';
 import { getMyProfile } from '../services/teacherService';
@@ -20,6 +20,12 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
   useEffect(() => {
     getMyProfile().then(setMe).catch(() => setMe(null));
   }, []);
+
+  useEffect(() => {
+    if (me?.mustChangePassword && location.pathname !== '/change-password') {
+      navigate('/change-password');
+    }
+  }, [me, location.pathname, navigate]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -184,7 +190,7 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
           </nav>
         </div>
 
-        {/* SIDEBAR FOOTER — profile row + 3-dot menu */}
+        {/* SIDEBAR FOOTER â€” profile row + 3-dot menu */}
         <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '12px' }}>
           <div
             ref={profileMenuRef}
@@ -440,7 +446,7 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
           </div>
 
           <footer style={{ height: '40px', backgroundColor: theme.sidebarBg, borderTop: `1px solid ${theme.border}`, padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: theme.subText, flexShrink: 0 }}>
-            <div><strong>© 2026 Sabio SMIS v2.4.0</strong></div>
+            <div><strong>Â© 2026 Sabio SMIS v2.4.0</strong></div>
             <div style={{ display: 'flex', gap: '20px' }}>
               <span style={{ cursor: 'pointer' }}>Support Center</span>
               <span style={{ cursor: 'pointer' }}>Privacy Policy</span>

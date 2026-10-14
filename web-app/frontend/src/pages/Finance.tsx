@@ -31,16 +31,31 @@ interface RecentPayment {
   amount: string;
 }
 
-interface AcademicYear {
+interface AcademicTermRecord {
   id: string;
-  year_name?: string;
-  name?: string;
+  academic_year: string;
+  term_name: string;
+  is_active: boolean;
 }
 
-interface TermRecord {
+interface ClassRecord {
   id: string;
-  term_name?: string;
-  name?: string;
+  name: string;
+  grade: string;
+}
+
+interface GradeRecord {
+  id: string;
+  name: string;
+  code: string;
+}
+
+interface StudentRecord {
+  id: string;
+  custom_id: string;
+  first_name: string;
+  last_name: string;
+  class_name: string;
 }
 
 export const Finance: React.FC = () => {
@@ -49,9 +64,12 @@ export const Finance: React.FC = () => {
   // Record / Adjust Payment tab state
   const [paymentTab, setPaymentTab] = useState<'record' | 'adjust'>('record');
 
-  // Dynamic Lookup Data from Tables
-  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
-  const [terms, setTerms] = useState<TermRecord[]>([]);
+  // Dynamic Lookup Data from Tables based on your schema
+  const [academicTerms, setAcademicTerms] = useState<AcademicTermRecord[]>([]);
+  const [classesList, setClassesList] = useState<ClassRecord[]>([]);
+  const [gradesList, setGradesList] = useState<GradeRecord[]>([]);
+  const [studentsList, setStudentsList] = useState<StudentRecord[]>([]);
+
   const [selectedAcademicYear, setSelectedAcademicYear] = useState('2026/2027');
   const [selectedTerm, setSelectedTerm] = useState('Term 1');
 
@@ -88,21 +106,41 @@ export const Finance: React.FC = () => {
   const [paymentReference, setPaymentReference] = useState('');
   const [paymentDate, setPaymentDate] = useState('');
 
-  // Fetch dynamic lookups (Academic Years, Terms, Payments)
+  // Fetch dynamic lookups using your exact table schemas (academic_terms, classes, grades, students, fee_payments)
   const fetchFinanceData = useCallback(async () => {
     try {
-      // Fetch Academic Years table
-      const { data: yearsData } = await supabase.from('academic_years').select('*');
-      if (yearsData && yearsData.length > 0) {
-        setAcademicYears(yearsData);
-      }
-
-      // Fetch Terms table
-      const { data: termsData } = await supabase.from('terms').select('*');
+      // 1. Fetch academic_terms for years and terms dropdowns
+      const { data: termsData } = await supabase.from('academic_terms').select('*');
       if (termsData && termsData.length > 0) {
-        setTerms(termsData);
+        setAcademicTerms(termsData as AcademicTermRecord[]);
+        // Default to active term if available
+        const activeTerm = termsData.find((t: AcademicTermRecord) => t.is_active);
+        if (activeTerm) {
+          setSelectedAcademicYear(activeTerm.academic_year);
+          setSelectedTerm(activeTerm.term_name);
+        }
       }
 
+      // 2. Fetch classes for scoping/assignments
+      const { data: classData } = await supabase.from('classes').select('*');
+      if (classData) {
+        setClassesList(classData as ClassRecord[]);
+      }
+
+      // 3. Fetch grades
+      const { data: gradeData } = await supabase.from('grades').select('*');
+      if (gradeData) {
+        setGradesList(gradeData as GradeRecord[]);
+      }
+
+      // 4. Fetch students for payment search or allocations
+      const { data: studentData } = await supabase.from('students').select('*');
+      if (studentData) {
+        setStudentsList(studentData as StudentRecord[]);
+        setKpiData(prev => ({ ...prev, studentCount: studentData.length }));
+      }
+
+      // 5. Fetch fee payments
       const { data: payments, error } = await supabase.from('fee_payments').select('*');
       if (!error && payments) {
         const typedPayments = payments as FeePaymentRecord[];
@@ -129,7 +167,7 @@ export const Finance: React.FC = () => {
     }
   }, []);
 
-  // Initialize data load cleanly without triggering effect linter warnings
+  // Initialize data load cleanly
   useEffect(() => {
     let isMounted = true;
     const loadData = async () => {
@@ -142,6 +180,11 @@ export const Finance: React.FC = () => {
       isMounted = false;
     };
   }, [fetchFinanceData]);
+
+  // Extract unique academic years from academic_terms
+  const uniqueAcademicYears = Array.from(new Set(academicTerms.map(t => t.academic_year)));
+  // Filter terms belonging to selected academic year
+  const availableTermsForYear = academicTerms.filter(t => t.academic_year === selectedAcademicYear);
 
   // CREATE: Save new Fee Structure to Supabase and apply to scope
   const handleSaveFeeStructure = async () => {
@@ -172,12 +215,9 @@ export const Finance: React.FC = () => {
         return;
       }
 
-      // 2. Automatically assign and affect target students based on scope
-      const studentQuery = supabase.from('students').select('id, grade, class_name, program');
-
-      const { data: targetStudents, error: studentError } = await studentQuery;
-      if (!studentError && targetStudents && targetStudents.length > 0) {
-        const allocations = targetStudents.map((st: { id: string }) => ({
+      // 2. Automatically assign and affect target students based on scope using the fetched students list
+      if (studentsList && studentsList.length > 0) {
+        const allocations = studentsList.map((st) => ({
           student_id: st.id,
           fee_structure_id: insertedStructure?.id,
           amount_due: baseNumAmount,
@@ -272,13 +312,12 @@ export const Finance: React.FC = () => {
               onChange={(e) => setSelectedAcademicYear(e.target.value)}
               style={{ padding: '8px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '12px', fontWeight: 'bold', color: '#334155', backgroundColor: '#ffffff' }}
             >
-              {academicYears.length === 0 ? (
+              {uniqueAcademicYears.length === 0 ? (
                 <option value="2026/2027">2026/2027</option>
               ) : (
-                academicYears.map((ay) => {
-                  const val = ay.year_name || ay.name || '';
-                  return <option key={ay.id} value={val}>{val}</option>;
-                })
+                uniqueAcademicYears.map((ay) => (
+                  <option key={ay} value={ay}>{ay}</option>
+                ))
               )}
             </select>
             <select 
@@ -286,13 +325,12 @@ export const Finance: React.FC = () => {
               onChange={(e) => setSelectedTerm(e.target.value)}
               style={{ padding: '8px 12px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '12px', fontWeight: 'bold', color: '#334155', backgroundColor: '#ffffff' }}
             >
-              {terms.length === 0 ? (
+              {availableTermsForYear.length === 0 ? (
                 <option value="Term 1">Term 1</option>
               ) : (
-                terms.map((t) => {
-                  const val = t.term_name || t.name || '';
-                  return <option key={t.id} value={val}>{val}</option>;
-                })
+                availableTermsForYear.map((t) => (
+                  <option key={t.id} value={t.term_name}>{t.term_name}</option>
+                ))
               )}
             </select>
             <button 
@@ -316,7 +354,7 @@ export const Finance: React.FC = () => {
             <div>
               <span style={{ fontWeight: '800', color: '#1e3a8a', fontSize: '15px' }}>{selectedAcademicYear} — {selectedTerm}</span>
               <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 'bold', marginLeft: '10px' }}>Fee cycle: Active</span>
-              <span style={{ fontSize: '12px', color: '#475569', marginLeft: '12px' }}>Sept 1 — Dec 18</span>
+              <span style={{ fontSize: '12px', color: '#475569', marginLeft: '12px' }}>Academic Terms Synced</span>
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -636,13 +674,18 @@ export const Finance: React.FC = () => {
 
                 <div style={{ marginBottom: '16px' }}>
                   <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Student ID / Name</label>
-                  <input 
-                    type="text" 
+                  <select 
                     value={paymentStudentSearch}
                     onChange={(e) => setPaymentStudentSearch(e.target.value)}
-                    placeholder="Search students..." 
-                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
-                  />
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', backgroundColor: '#ffffff' }}
+                  >
+                    <option value="">Select student from database...</option>
+                    {studentsList.map((st) => (
+                      <option key={st.id} value={`${st.first_name} ${st.last_name}`}>
+                        {st.first_name} {st.last_name} ({st.custom_id}) - {st.class_name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
@@ -743,13 +786,16 @@ export const Finance: React.FC = () => {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
                   <div>
                     <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Student</label>
-                    <select style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
-                      <option>Select student...</option>
+                    <select style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', backgroundColor: '#ffffff' }}>
+                      <option value="">Select student...</option>
+                      {studentsList.map((st) => (
+                        <option key={st.id} value={st.id}>{st.first_name} {st.last_name}</option>
+                      ))}
                     </select>
                   </div>
                   <div>
                     <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Fee Item</label>
-                    <select style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}>
+                    <select style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', backgroundColor: '#ffffff' }}>
                       <option>Select fee item...</option>
                     </select>
                   </div>
@@ -831,30 +877,32 @@ export const Finance: React.FC = () => {
 
               <div style={{ padding: '24px' }}>
                 <div style={{ fontSize: '10px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', marginBottom: '8px' }}>1. SELECT FEE STRUCTURE</div>
-                <select style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginBottom: '20px' }}>
+                <select style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginBottom: '20px', backgroundColor: '#ffffff' }}>
                   <option>Choose a predefined structure...</option>
                 </select>
 
                 <div style={{ fontSize: '10px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', marginBottom: '8px' }}>2. TARGET AUDIENCE</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
                   <div style={{ border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px', textAlign: 'center', cursor: 'pointer' }}>
-                    <div style={{ fontSize: '20px' }}></div>
-                    <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Entire Grade</div>
+                    <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Entire Grade ({gradesList.length})</div>
                   </div>
                   <div style={{ border: '2px solid #002b49', backgroundColor: '#f0f9ff', borderRadius: '10px', padding: '12px', textAlign: 'center', cursor: 'pointer' }}>
-                    <div style={{ fontSize: '20px' }}></div>
-                    <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#002b49' }}>Specific Class</div>
+                    <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#002b49' }}>Specific Class ({classesList.length})</div>
                   </div>
                   <div style={{ border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px', textAlign: 'center', cursor: 'pointer' }}>
-                    <div style={{ fontSize: '20px' }}></div>
-                    <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Individual</div>
+                    <div style={{ fontSize: '12px', fontWeight: 'bold' }}>Individual ({studentsList.length})</div>
                   </div>
                 </div>
 
                 <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px', marginBottom: '20px' }}>
-                  <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '6px' }}>Select Class(es)</div>
+                  <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '6px' }}>Select Class(es) from Database</div>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    <button style={{ border: '1px dashed #cbd5e1', backgroundColor: '#ffffff', borderRadius: '6px', padding: '4px 10px', fontSize: '11px', fontWeight: 'bold', color: '#1e40af', cursor: 'pointer' }}>+ Add Class</button>
+                    {classesList.map((cls) => (
+                      <span key={cls.id} style={{ backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '6px', padding: '4px 10px', fontSize: '11px', fontWeight: 'bold', color: '#1e40af' }}>
+                        {cls.name}
+                      </span>
+                    ))}
+                    {classesList.length === 0 && <span style={{ fontSize: '11px', color: '#64748b' }}>No classes found</span>}
                   </div>
                 </div>
 
@@ -872,7 +920,7 @@ export const Finance: React.FC = () => {
                 <div style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '12px', padding: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <div style={{ fontSize: '10px', color: '#1e3a8a' }}>Impact Analysis</div>
-                    <div style={{ fontWeight: '800', fontSize: '15px', color: '#1e40af' }}>Assigning to -- students</div>
+                    <div style={{ fontWeight: '800', fontSize: '15px', color: '#1e40af' }}>Assigning to {studentsList.length} students</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '10px', color: '#1e3a8a' }}>Total Projected Revenue</div>
@@ -916,7 +964,7 @@ export const Finance: React.FC = () => {
                       type="text" 
                       value={newFeeName}
                       onChange={(e) => setNewFeeName(e.target.value)}
-                      placeholder="e.g. Term 1 / First Semester" 
+                      placeholder="e.g. Tuition Fall 2026" 
                       style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
                     />
                   </div>
@@ -925,7 +973,7 @@ export const Finance: React.FC = () => {
                     <select 
                       value={newFeeCategory}
                       onChange={(e) => setNewFeeCategory(e.target.value)}
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', backgroundColor: '#ffffff' }}
                     >
                       <option value="">Select category...</option>
                       <option value="Tuition">Tuition</option>
@@ -952,12 +1000,11 @@ export const Finance: React.FC = () => {
                     <select 
                       value={selectedAcademicYear} 
                       onChange={(e) => setSelectedAcademicYear(e.target.value)}
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', backgroundColor: '#ffffff' }}
                     >
-                      {academicYears.map((ay) => {
-                        const val = ay.year_name || ay.name || '';
-                        return <option key={ay.id} value={val}>{val}</option>;
-                      })}
+                      {uniqueAcademicYears.map((ay) => (
+                        <option key={ay} value={ay}>{ay}</option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -965,12 +1012,11 @@ export const Finance: React.FC = () => {
                     <select 
                       value={selectedTerm}
                       onChange={(e) => setSelectedTerm(e.target.value)}
-                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', backgroundColor: '#ffffff' }}
                     >
-                      {terms.map((t) => {
-                        const val = t.term_name || t.name || '';
-                        return <option key={t.id} value={val}>{val}</option>;
-                      })}
+                      {availableTermsForYear.map((t) => (
+                        <option key={t.id} value={t.term_name}>{t.term_name}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -981,7 +1027,7 @@ export const Finance: React.FC = () => {
                       type="checkbox" 
                       checked={scopeType === 'all_grades'} 
                       onChange={() => setScopeType('all_grades')} 
-                    /> All Grades
+                    /> All Grades ({gradesList.length})
                   </label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <input 

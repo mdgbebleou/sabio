@@ -23,6 +23,12 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
   }, []);
 
   useEffect(() => {
+    if (me?.mustChangePassword && location.pathname !== '/change-password') {
+      navigate('/change-password');
+    }
+  }, [me, location.pathname, navigate]);
+
+  useEffect(() => {
     const handleResize = () => {
       setWindowWidth(window.innerWidth);
       if (window.innerWidth < 1024) {
@@ -453,3 +459,4 @@ export const TeacherLayout: React.FC<TeacherLayoutProps> = ({ children }) => {
     </div>
   );
 };
+

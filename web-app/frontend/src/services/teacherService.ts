@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+﻿import { supabase } from './supabase';
 
 export interface TeacherClass {
   id: string;
@@ -132,7 +132,7 @@ const mapStudent = (r: Row): TeacherStudent => ({
   lastName: (r.last_name as string) || '',
   name: `${(r.first_name as string) || ''} ${(r.last_name as string) || ''}`.trim(),
   initials: initialsOf(r.first_name as string, r.last_name as string),
-  gender: (r.gender as string) || '—',
+  gender: (r.gender as string) || 'â€”',
   age: ageFrom(r.dob as string | null),
   status: (r.status as string) || '',
   avatar: (r.avatar as string) || null,
@@ -475,6 +475,8 @@ export interface MyProfile {
   employmentStatus: string | null;
   office: string | null;
   officeHours: string | null;
+  mustChangePassword: boolean;
+  passwordChangedAt: string | null;
 }
 
 const mapMyProfile = (r: Row): MyProfile => ({
@@ -500,13 +502,15 @@ const mapMyProfile = (r: Row): MyProfile => ({
   employmentStatus: (r.employment_status as string) || null,
   office: (r.office as string) || null,
   officeHours: (r.office_hours as string) || null,
+  mustChangePassword: !!r.must_change_password,
+  passwordChangedAt: (r.password_changed_at as string) || null,
 });
 
 export async function getMyProfile(): Promise<MyProfile> {
   const uid = await currentUserId();
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, email, role, status, first_name, last_name, middle_name, full_name, custom_id, primary_phone, alternate_phone, address, avatar_url, assign_class, gender, date_of_birth, position, employment_status, office, office_hours')
+    .select('id, email, role, status, first_name, last_name, middle_name, full_name, custom_id, primary_phone, alternate_phone, address, avatar_url, assign_class, gender, date_of_birth, position, employment_status, office, office_hours, must_change_password, password_changed_at')
     .eq('id', uid)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -551,7 +555,7 @@ export async function updateMyProfile(patch: MyProfileUpdate): Promise<MyProfile
         office_hours: patch.officeHours?.trim() || null,
       })
       .eq('id', uid)
-      .select('id, email, role, status, first_name, last_name, middle_name, full_name, custom_id, primary_phone, alternate_phone, address, avatar_url, assign_class, gender, date_of_birth, position, employment_status, office, office_hours')
+      .select('id, email, role, status, first_name, last_name, middle_name, full_name, custom_id, primary_phone, alternate_phone, address, avatar_url, assign_class, gender, date_of_birth, position, employment_status, office, office_hours, must_change_password, password_changed_at')
       .single()
   );
   return mapMyProfile(row);
@@ -560,6 +564,14 @@ export async function updateMyProfile(patch: MyProfileUpdate): Promise<MyProfile
 export async function updateMyPassword(newPassword: string): Promise<void> {
   const { error } = await supabase.auth.updateUser({ password: newPassword });
   if (error) throw new Error(error.message);
+  const uid = await currentUserId();
+  await supabase
+    .from('profiles')
+    .update({
+      must_change_password: false,
+      password_changed_at: new Date().toISOString(),
+    })
+    .eq('id', uid);
 }
 // ---------- messages ----------
 
@@ -1245,7 +1257,7 @@ export interface TimetableEntry {
   classId: string | null;
   className: string | null;
   subject: string;
-  dayOfWeek: number; // 0 = Sunday … 6 = Saturday
+  dayOfWeek: number; // 0 = Sunday â€¦ 6 = Saturday
   startTime: string; // HH:MM
   endTime: string;
   room: string | null;
@@ -1792,7 +1804,7 @@ export async function getAcademicsDashboard(): Promise<AcademicsDashboard> {
       t.id as string,
       (t.full_name as string) ||
         `${(t.first_name as string) || ''} ${(t.last_name as string) || ''}`.trim() ||
-        '—',
+        'â€”',
     ])
   );
 
@@ -1882,7 +1894,7 @@ export async function getAcademicsDashboard(): Promise<AcademicsDashboard> {
       ? Math.round((classScores.reduce((a, b) => a + b, 0) / classScores.length) * 10) / 10
       : null;
 
-    // completion = scored / (students × assessments)
+    // completion = scored / (students Ã— assessments)
     const denom = studentCount * classAssessmentCount;
     const scoredTotal = classAssessments.reduce(
       (sum, a) => sum + (scoredByAssessment.get(a.id as string) || 0),
@@ -1892,7 +1904,7 @@ export async function getAcademicsDashboard(): Promise<AcademicsDashboard> {
 
     const status: ClassPerformanceRow['status'] =
       avg == null ? 'Stable' : avg >= 70 ? 'Improving' : avg < 55 ? 'Review' : 'Stable';
-    const changeLabel = avg == null ? '—' : '—';
+    const changeLabel = avg == null ? 'â€”' : 'â€”';
 
     return {
       classId: cid,
@@ -1922,7 +1934,7 @@ export async function getAcademicsDashboard(): Promise<AcademicsDashboard> {
         classId: cid,
         className: classNameById.get(cid) || '',
         teacherId,
-        teacherName: teacherId ? (teacherNameById.get(teacherId) || '—') : '—',
+        teacherName: teacherId ? (teacherNameById.get(teacherId) || 'â€”') : 'â€”',
         status: 'Submitted',
         approvalStatus: ((a.approval_status as string) || 'Pending') as AdminAssessmentRow['approvalStatus'],
         scoredCount: scoredByAssessment.get(a.id as string) || 0,
@@ -1963,7 +1975,7 @@ export async function approveAssessment(assessmentId: string): Promise<void> {
     .select('id');
   if (error) throw new Error(error.message);
   if (!data || data.length === 0) {
-    throw new Error('Update failed — assessment not found or permission denied.');
+    throw new Error('Update failed â€” assessment not found or permission denied.');
   }
 }
 
@@ -1979,7 +1991,7 @@ export async function rejectAssessment(assessmentId: string, reason: string): Pr
     .select('id');
   if (error) throw new Error(error.message);
   if (!data || data.length === 0) {
-    throw new Error('Update failed — assessment not found or permission denied.');
+    throw new Error('Update failed â€” assessment not found or permission denied.');
   }
 }
 
@@ -1995,6 +2007,646 @@ export async function publishAssessment(assessmentId: string): Promise<void> {
     .select('id');
   if (error) throw new Error(error.message);
   if (!data || data.length === 0) {
-    throw new Error('Update failed — assessment not found or permission denied.');
+    throw new Error('Update failed â€” assessment not found or permission denied.');
   }
 }
+// ---------- accountant: fees & payments ----------
+
+export interface FeeRecord {
+  id: string;
+  studentId: string;
+  studentName: string;
+  studentCustomId: string;
+  studentInitials: string;
+  className: string;
+  category: string;
+  totalFees: number;
+  amountPaid: number;
+  balance: number;
+  status: 'Paid' | 'Partially Paid' | 'Overdue' | 'Outstanding';
+  dueDate: string | null;
+  term: string;
+  invoiceNumber: string | null;
+  invoiceStatus: 'Draft' | 'Sent' | 'Paid' | 'Partially Paid' | 'Overdue' | null;
+  sentAt: string | null;
+}
+
+const feeInitials = (first?: string | null, last?: string | null) =>
+  `${(first || '').charAt(0)}${(last || '').charAt(0)}`.toUpperCase();
+
+export async function getAllFeeRecords(): Promise<FeeRecord[]> {
+  const feeRows = must<Row[]>(
+    await supabase
+      .from('fees')
+      .select('id, student_id, category, total_fees, amount_paid, balance, status, due_date, term, invoice_number, invoice_status, sent_at')
+      .order('created_at', { ascending: false })
+  );
+  if (feeRows.length === 0) return [];
+
+  const studentIds = Array.from(new Set(feeRows.map((r) => r.student_id as string)));
+
+  const students = must<Row[]>(
+    await supabase
+      .from('students')
+      .select('id, first_name, last_name, custom_id, class_id')
+      .in('id', studentIds)
+  );
+  const studentById = new Map(students.map((s) => [s.id as string, s]));
+
+  const classIds = Array.from(
+    new Set(
+      students.map((s) => s.class_id as string).filter((x): x is string => !!x)
+    )
+  );
+  const classNames = new Map<string, string>();
+  if (classIds.length > 0) {
+    const cls = must<Row[]>(await supabase.from('classes').select('id, name').in('id', classIds));
+    for (const c of cls) classNames.set(c.id as string, (c.name as string) || '');
+  }
+
+  return feeRows.map((r) => {
+    const s = studentById.get(r.student_id as string) || {};
+    const classId = (s.class_id as string) || '';
+    return {
+      id: r.id as string,
+      studentId: r.student_id as string,
+      studentName: `${(s.first_name as string) || ''} ${(s.last_name as string) || ''}`.trim() || 'Student',
+      studentCustomId: (s.custom_id as string) || '',
+      studentInitials: feeInitials(s.first_name as string, s.last_name as string) || '?',
+      className: classNames.get(classId) || 'â€”',
+      category: (r.category as string) || 'School Fees',
+      totalFees: Number(r.total_fees ?? 0),
+      amountPaid: Number(r.amount_paid ?? 0),
+      balance: Number(r.balance ?? 0),
+      status: (r.status as FeeRecord['status']) || 'Outstanding',
+      dueDate: (r.due_date as string) || null,
+      term: (r.term as string) || '',
+      invoiceNumber: (r.invoice_number as string) || null,
+      invoiceStatus: ((r.invoice_status as string) as any) || null,
+      sentAt: (r.sent_at as string) || null,
+    };
+  });
+}
+
+export interface FeeStats {
+  totalExpected: number;
+  totalCollected: number;
+  totalOutstanding: number;
+  studentsWithBalance: number;
+  byStatus: { Paid: number; 'Partially Paid': number; Overdue: number; Outstanding: number };
+}
+
+export async function getFeeStats(): Promise<FeeStats> {
+  const records = await getAllFeeRecords();
+  const totalExpected = records.reduce((a, r) => a + r.totalFees, 0);
+  const totalCollected = records.reduce((a, r) => a + r.amountPaid, 0);
+  const totalOutstanding = records.reduce((a, r) => a + r.balance, 0);
+  const studentsWithBalance = records.filter((r) => r.balance > 0).length;
+  const byStatus = { Paid: 0, 'Partially Paid': 0, Overdue: 0, Outstanding: 0 } as FeeStats['byStatus'];
+  for (const r of records) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+  return { totalExpected, totalCollected, totalOutstanding, studentsWithBalance, byStatus };
+}
+
+export interface FeeTrendPoint {
+  month: string;
+  expected: number;
+  collected: number;
+}
+
+export async function getFeeTrend(): Promise<FeeTrendPoint[]> {
+  // Group payments by month for the last 6 months
+  const rows = must<Row[]>(
+    await supabase
+      .from('fee_payments')
+      .select('amount, paid_at, status')
+      .eq('status', 'Completed')
+      .order('paid_at', { ascending: true })
+  );
+
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const now = new Date();
+  const buckets: { month: string; expected: number; collected: number; key: string }[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    buckets.push({
+      month: monthNames[d.getMonth()],
+      expected: 0,
+      collected: 0,
+      key: `${d.getFullYear()}-${d.getMonth()}`,
+    });
+  }
+
+  for (const r of rows) {
+    const iso = r.paid_at as string;
+    if (!iso) continue;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    const b = buckets.find((x) => x.key === key);
+    if (b) b.collected += Number(r.amount ?? 0);
+  }
+
+  // expected per month = current total expected (simple approximation)
+  const stats = await getFeeStats();
+  const per = stats.totalExpected / 6;
+  for (const b of buckets) b.expected = Math.round(per);
+
+  return buckets.map((b) => ({ month: b.month, expected: b.expected, collected: Math.round(b.collected) }));
+}
+
+export interface ClassOutstanding {
+  className: string;
+  amount: number;
+  percentOfMax: number;
+}
+
+export async function getClassOutstanding(): Promise<ClassOutstanding[]> {
+  const records = await getAllFeeRecords();
+  const byClass = new Map<string, number>();
+  for (const r of records) {
+    const key = r.className || 'â€”';
+    byClass.set(key, (byClass.get(key) || 0) + r.balance);
+  }
+  const arr = Array.from(byClass.entries()).map(([className, amount]) => ({ className, amount, percentOfMax: 0 }));
+  const max = Math.max(1, ...arr.map((a) => a.amount));
+  for (const a of arr) a.percentOfMax = Math.round((a.amount / max) * 100);
+  arr.sort((a, b) => b.amount - a.amount);
+  return arr;
+}
+
+export interface PaymentRow {
+  id: string;
+  feeId: string;
+  studentId: string;
+  studentName: string;
+  studentInitials: string;
+  amount: number;
+  method: 'Mobile Money' | 'Bank Transfer' | 'Cash' | 'Card';
+  reference: string | null;
+  status: 'Completed' | 'Pending' | 'Verification Required';
+  notes: string | null;
+  paidAt: string;
+}
+
+export async function getAllPayments(): Promise<PaymentRow[]> {
+  const paymentRows = must<Row[]>(
+    await supabase
+      .from('fee_payments')
+      .select('id, fee_id, student_id, amount, method, reference, status, notes, paid_at')
+      .order('paid_at', { ascending: false })
+      .limit(200)
+  );
+  if (paymentRows.length === 0) return [];
+
+  const studentIds = Array.from(new Set(paymentRows.map((r) => r.student_id as string)));
+  const students = must<Row[]>(
+    await supabase.from('students').select('id, first_name, last_name').in('id', studentIds)
+  );
+  const studentById = new Map(students.map((s) => [s.id as string, s]));
+
+  return paymentRows.map((r) => {
+    const s = studentById.get(r.student_id as string) || {};
+    return {
+      id: r.id as string,
+      feeId: r.fee_id as string,
+      studentId: r.student_id as string,
+      studentName: `${(s.first_name as string) || ''} ${(s.last_name as string) || ''}`.trim() || 'Student',
+      studentInitials: feeInitials(s.first_name as string, s.last_name as string) || '?',
+      amount: Number(r.amount ?? 0),
+      method: (r.method as PaymentRow['method']) || 'Cash',
+      reference: (r.reference as string) || null,
+      status: (r.status as PaymentRow['status']) || 'Completed',
+      notes: (r.notes as string) || null,
+      paidAt: (r.paid_at as string) || '',
+    };
+  });
+}
+
+export interface NewPayment {
+  feeId: string;
+  studentId: string;
+  amount: number;
+  method: 'Mobile Money' | 'Bank Transfer' | 'Cash' | 'Card';
+  reference?: string | null;
+  notes?: string | null;
+}
+
+export async function recordPayment(p: NewPayment): Promise<void> {
+  const uid = await currentUserId();
+  const { error } = await supabase.from('fee_payments').insert({
+    fee_id: p.feeId,
+    student_id: p.studentId,
+    amount: p.amount,
+    method: p.method,
+    reference: p.reference?.trim() || null,
+    notes: p.notes?.trim() || null,
+    status: 'Completed',
+    recorded_by: uid,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function getFeeForStudent(studentId: string): Promise<FeeRecord | null> {
+  const all = await getAllFeeRecords();
+  return all.find((r) => r.studentId === studentId) || null;
+}
+
+export interface PaymentStats {
+  today: number;
+  thisWeek: number;
+  thisMonth: number;
+  byMethod: { 'Mobile Money': number; 'Bank Transfer': number; Cash: number; Card: number };
+}
+
+export async function getPaymentStats(): Promise<PaymentStats> {
+  const payments = await getAllPayments();
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfWeek = startOfDay - now.getDay() * 86400000;
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+  let today = 0, thisWeek = 0, thisMonth = 0;
+  const byMethod = { 'Mobile Money': 0, 'Bank Transfer': 0, Cash: 0, Card: 0 };
+
+  for (const p of payments) {
+    if (p.status !== 'Completed') continue;
+    const t = new Date(p.paidAt).getTime();
+    if (Number.isNaN(t)) continue;
+    if (t >= startOfDay) today += p.amount;
+    if (t >= startOfWeek) thisWeek += p.amount;
+    if (t >= startOfMonth) thisMonth += p.amount;
+    if (byMethod[p.method] !== undefined) byMethod[p.method] += p.amount;
+  }
+
+  return { today, thisWeek, thisMonth, byMethod };
+}
+export async function getPaymentsForFee(feeId: string): Promise<PaymentRow[]> {
+  const rows = must<Row[]>(
+    await supabase
+      .from('fee_payments')
+      .select('id, fee_id, student_id, amount, method, reference, status, notes, paid_at')
+      .eq('fee_id', feeId)
+      .order('paid_at', { ascending: false })
+  );
+  if (rows.length === 0) return [];
+
+  const studentIds = Array.from(new Set(rows.map((r) => r.student_id as string)));
+  const students = must<Row[]>(
+    await supabase.from('students').select('id, first_name, last_name').in('id', studentIds)
+  );
+  const studentById = new Map(students.map((s) => [s.id as string, s]));
+
+  return rows.map((r) => {
+    const s = studentById.get(r.student_id as string) || {};
+    return {
+      id: r.id as string,
+      feeId: r.fee_id as string,
+      studentId: r.student_id as string,
+      studentName: `${(s.first_name as string) || ''} ${(s.last_name as string) || ''}`.trim() || 'Student',
+      studentInitials: feeInitials(s.first_name as string, s.last_name as string) || '?',
+      amount: Number(r.amount ?? 0),
+      method: (r.method as PaymentRow['method']) || 'Cash',
+      reference: (r.reference as string) || null,
+      status: (r.status as PaymentRow['status']) || 'Completed',
+      notes: (r.notes as string) || null,
+      paidAt: (r.paid_at as string) || '',
+    };
+  });
+}
+export interface PaymentDetailedRow extends PaymentRow {
+  category: string | null;
+}
+
+export async function getPaymentsDetailed(): Promise<PaymentDetailedRow[]> {
+  const payments = await getAllPayments();
+  if (payments.length === 0) return [];
+
+  const feeIds = Array.from(new Set(payments.map((p) => p.feeId)));
+  const fees = must<Row[]>(
+    await supabase.from('fees').select('id, category').in('id', feeIds)
+  );
+  const catById = new Map(fees.map((f) => [f.id as string, (f.category as string) || null]));
+
+  return payments.map((p) => ({ ...p, category: catById.get(p.feeId) ?? null }));
+}
+// ---------- notifications ----------
+
+export interface AppNotification {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  link: string | null;
+  badge: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export async function getMyNotifications(limit = 50): Promise<AppNotification[]> {
+  const uid = await currentUserId();
+  const rows = must<Row[]>(
+    await supabase
+      .from('notifications')
+      .select('id, type, title, message, link, badge, is_read, created_at')
+      .eq('user_id', uid)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+  );
+  return rows.map((r) => ({
+    id: r.id as string,
+    type: (r.type as string) || '',
+    title: (r.title as string) || '',
+    message: (r.message as string) || '',
+    link: (r.link as string) || null,
+    badge: (r.badge as string) || null,
+    isRead: !!r.is_read,
+    createdAt: (r.created_at as string) || '',
+  }));
+}
+
+export async function markNotificationRead(id: string): Promise<void> {
+  const { error } = await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function markAllNotificationsRead(): Promise<void> {
+  const uid = await currentUserId();
+  const { error } = await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('user_id', uid)
+    .eq('is_read', false);
+  if (error) throw new Error(error.message);
+}
+
+export async function clearMyNotifications(): Promise<void> {
+  const uid = await currentUserId();
+  const { error } = await supabase.from('notifications').delete().eq('user_id', uid);
+  if (error) throw new Error(error.message);
+}
+
+export interface NewNotification {
+  userId: string;
+  type: string;
+  title: string;
+  message: string;
+  link?: string | null;
+  badge?: string | null;
+}
+
+export async function createNotification(n: NewNotification): Promise<void> {
+  const { error } = await supabase.from('notifications').insert({
+    user_id: n.userId,
+    type: n.type,
+    title: n.title,
+    message: n.message,
+    link: n.link?.trim() || null,
+    badge: n.badge?.trim() || null,
+  });
+  if (error) throw new Error(error.message);
+}
+
+// ---------- fee structures ----------
+
+export interface FeeStructure {
+  id: string;
+  academicYear: string;
+  term: string;
+  classId: string | null;
+  className: string;
+  gradeId: string | null;
+  category: string;
+  amount: number;
+  notes: string | null;
+  status: 'Draft' | 'Active' | 'Archived';
+  createdAt: string;
+}
+
+export async function getFeeStructures(): Promise<FeeStructure[]> {
+  const rows = must<Row[]>(
+    await supabase
+      .from('fee_structures')
+      .select('id, academic_year, term, class_id, grade_id, category, amount, notes, status, created_at')
+      .order('created_at', { ascending: false })
+  );
+  if (rows.length === 0) return [];
+
+  const classIds = Array.from(
+    new Set(rows.map((r) => r.class_id as string).filter(Boolean))
+  );
+  const classNames = new Map<string, string>();
+  if (classIds.length > 0) {
+    const cls = must<Row[]>(await supabase.from('classes').select('id, name').in('id', classIds));
+    for (const c of cls) classNames.set(c.id as string, (c.name as string) || '');
+  }
+
+  return rows.map((r) => ({
+    id: r.id as string,
+    academicYear: (r.academic_year as string) || '',
+    term: (r.term as string) || '',
+    classId: (r.class_id as string) || null,
+    className: classNames.get(r.class_id as string) || 'All Classes',
+    gradeId: (r.grade_id as string) || null,
+    category: (r.category as string) || 'School Fees',
+    amount: Number(r.amount ?? 0),
+    notes: (r.notes as string) || null,
+    status: ((r.status as string) as 'Active' | 'Archived') || 'Active',
+    createdAt: (r.created_at as string) || '',
+  }));
+}
+
+export interface NewFeeStructure {
+  academicYear: string;
+  term: string;
+  classId: string | null;
+  gradeId?: string | null;
+  category: string;
+  amount: number;
+  notes?: string | null;
+  status?: 'Draft' | 'Active' | 'Archived';
+}
+
+export async function createFeeStructure(f: NewFeeStructure): Promise<void> {
+  const uid = await currentUserId();
+  const { error } = await supabase.from('fee_structures').insert({
+    academic_year: f.academicYear,
+    term: f.term,
+    class_id: f.classId,
+    grade_id: f.gradeId || null,
+    category: f.category,
+    amount: f.amount,
+    notes: f.notes?.trim() || null,
+    status: f.status || 'Draft',
+    created_by: uid,
+  });
+  if (error) throw new Error(error.message);
+}
+
+export interface FeeStructurePatch {
+  academicYear?: string;
+  term?: string;
+  classId?: string | null;
+  category?: string;
+  amount?: number;
+  notes?: string | null;
+  status?: 'Draft' | 'Active' | 'Archived';
+}
+
+export async function updateFeeStructure(id: string, patch: FeeStructurePatch): Promise<void> {
+  const update: Row = {};
+  if (patch.academicYear !== undefined) update.academic_year = patch.academicYear;
+  if (patch.term !== undefined) update.term = patch.term;
+  if (patch.classId !== undefined) update.class_id = patch.classId;
+  if (patch.category !== undefined) update.category = patch.category;
+  if (patch.amount !== undefined) update.amount = patch.amount;
+  if (patch.notes !== undefined) update.notes = patch.notes?.trim() || null;
+  if (patch.status !== undefined) update.status = patch.status;
+  if (Object.keys(update).length === 0) return;
+  const { error } = await supabase.from('fee_structures').update(update).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function archiveFeeStructure(id: string): Promise<void> {
+  const { error } = await supabase.from('fee_structures').update({ status: 'Archived' }).eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteFeeStructure(id: string): Promise<void> {
+  const { error } = await supabase.from('fee_structures').delete().eq('id', id);
+  if (error) throw new Error(error.message);
+}
+
+// ---------- user preferences ----------
+
+export interface UserPreferences {
+  currency: string;
+  fiscalYear: string | null;
+  autoReceipts: boolean;
+  emailAlerts: boolean;
+  smsAlerts: boolean;
+  overdueReminders: boolean;
+}
+
+const DEFAULT_PREFS: UserPreferences = {
+  currency: 'GHS (Ghana Cedi)',
+  fiscalYear: null,
+  autoReceipts: true,
+  emailAlerts: true,
+  smsAlerts: false,
+  overdueReminders: true,
+};
+
+export async function getMyPreferences(): Promise<UserPreferences> {
+  const uid = await currentUserId();
+  const { data, error } = await supabase
+    .from('user_preferences')
+    .select('currency, fiscal_year, auto_receipts, email_alerts, sms_alerts, overdue_reminders')
+    .eq('user_id', uid)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return { ...DEFAULT_PREFS };
+  const r = data as Row;
+  return {
+    currency: (r.currency as string) || DEFAULT_PREFS.currency,
+    fiscalYear: (r.fiscal_year as string) || null,
+    autoReceipts: r.auto_receipts === undefined ? true : !!r.auto_receipts,
+    emailAlerts: r.email_alerts === undefined ? true : !!r.email_alerts,
+    smsAlerts: !!r.sms_alerts,
+    overdueReminders: r.overdue_reminders === undefined ? true : !!r.overdue_reminders,
+  };
+}
+
+export async function saveMyPreferences(patch: Partial<UserPreferences>): Promise<UserPreferences> {
+  const uid = await currentUserId();
+  const current = await getMyPreferences();
+  const merged = { ...current, ...patch };
+  const { error } = await supabase.from('user_preferences').upsert(
+    {
+      user_id: uid,
+      currency: merged.currency,
+      fiscal_year: merged.fiscalYear,
+      auto_receipts: merged.autoReceipts,
+      email_alerts: merged.emailAlerts,
+      sms_alerts: merged.smsAlerts,
+      overdue_reminders: merged.overdueReminders,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id' }
+  );
+  if (error) throw new Error(error.message);
+  return merged;
+}
+
+// ---------- generated reports ----------
+
+export interface GeneratedReportRow {
+  id: string;
+  reportType: string;
+  periodLabel: string | null;
+  format: 'CSV' | 'PDF';
+  fileName: string | null;
+  generatedAt: string;
+}
+
+export async function getMyGeneratedReports(limit = 20): Promise<GeneratedReportRow[]> {
+  const uid = await currentUserId();
+  const rows = must<Row[]>(
+    await supabase
+      .from('generated_reports')
+      .select('id, report_type, period_label, format, file_name, generated_at')
+      .eq('user_id', uid)
+      .order('generated_at', { ascending: false })
+      .limit(limit)
+  );
+  return rows.map((r) => ({
+    id: r.id as string,
+    reportType: (r.report_type as string) || '',
+    periodLabel: (r.period_label as string) || null,
+    format: ((r.format as string) as 'CSV' | 'PDF') || 'CSV',
+    fileName: (r.file_name as string) || null,
+    generatedAt: (r.generated_at as string) || '',
+  }));
+}
+
+export interface NewGeneratedReport {
+  reportType: string;
+  periodLabel?: string | null;
+  format: 'CSV' | 'PDF';
+  fileName?: string | null;
+}
+
+export async function recordGeneratedReport(r: NewGeneratedReport): Promise<GeneratedReportRow> {
+  const uid = await currentUserId();
+  const ins = await supabase
+    .from('generated_reports')
+    .insert({
+      user_id: uid,
+      report_type: r.reportType,
+      period_label: r.periodLabel?.trim() || null,
+      format: r.format,
+      file_name: r.fileName?.trim() || null,
+    })
+    .select('id, report_type, period_label, format, file_name, generated_at')
+    .single();
+  if (ins.error) throw new Error(ins.error.message);
+  const row = ins.data as Row;
+  return {
+    id: row.id as string,
+    reportType: (row.report_type as string) || '',
+    periodLabel: (row.period_label as string) || null,
+    format: ((row.format as string) as 'CSV' | 'PDF') || 'CSV',
+    fileName: (row.file_name as string) || null,
+    generatedAt: (row.generated_at as string) || '',
+  };
+}
+
+
+export async function markInvoiceSent(feeId: string): Promise<void> {
+  const { error } = await supabase
+    .from('fees')
+    .update({ invoice_status: 'Sent', sent_at: new Date().toISOString() })
+    .eq('id', feeId);
+  if (error) throw new Error(error.message);
+}
+
+

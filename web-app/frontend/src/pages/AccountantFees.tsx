@@ -1,69 +1,104 @@
-import React, { useState } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { AccountantLayout } from '../components/AccountantLayout';
-import { 
-  ResponsiveContainer, 
-  BarChart, 
-  Bar, 
-  PieChart, 
-  Pie, 
-  Cell, 
-  XAxis, 
-  YAxis, 
-  Tooltip, 
-  CartesianGrid 
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
 } from 'recharts';
+import {
+  getAllFeeRecords,
+  getFeeStats,
+  getFeeTrend,
+  getClassOutstanding,
+  recordPayment,
+  getPaymentsForFee,
+} from '../services/teacherService';
+import type {
+  FeeRecord,
+  FeeStats,
+  FeeTrendPoint,
+  ClassOutstanding,
+  PaymentRow,
+} from '../services/teacherService';
 
-interface StudentFeeRecord {
-  id: string;
-  name: string;
-  studentId: string;
-  avatarBg: string;
-  class: string;
-  totalFees: string;
-  amountPaid: string;
-  balance: string;
-  status: 'Paid' | 'Partially Paid' | 'Overdue' | 'Outstanding';
-  dueDate: string;
-}
+const fmtMoney = (n: number): string => {
+  return `GHS ${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+};
 
-const feeTrendData = [
-  { month: 'Jan', expected: 45000, collected: 38000 },
-  { month: 'Feb', expected: 50000, collected: 42000 },
-  { month: 'Mar', expected: 55000, collected: 49000 },
-  { month: 'Apr', expected: 48000, collected: 37000 },
-  { month: 'May', expected: 52000, collected: 46000 },
-  { month: 'Jun', expected: 60000, collected: 52000 },
-  { month: 'Jul', expected: 65000, collected: 59000 },
-  { month: 'Aug', expected: 60000, collected: 45000 },
-];
+const fmtDate = (ymd: string | null): string => {
+  if (!ymd) return '-';
+  const d = new Date(`${ymd}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
 
-const paymentStatusData = [
-  { name: 'Paid', value: 86, color: '#10b981' },
-  { name: 'Partial', value: 42, color: '#3b82f6' },
-  { name: 'Outstanding', value: 58, color: '#f59e0b' },
-  { name: 'Overdue', value: 24, color: '#ef4444' },
-];
+const fmtDateTime = (iso: string | null): string => {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};
 
-const mockFeeRecords: StudentFeeRecord[] = [
-  { id: '1', name: 'Daniel Mensah', studentId: 'STU-1024', avatarBg: '#3b82f6', class: 'JHS 2', totalFees: 'GHS 4,500', amountPaid: 'GHS 4,500', balance: 'GHS 0', status: 'Paid', dueDate: 'Aug 10' },
-  { id: '2', name: 'Ama Owusu', studentId: 'STU-1031', avatarBg: '#ec4899', class: 'JHS 2', totalFees: 'GHS 4,500', amountPaid: 'GHS 3,000', balance: 'GHS 1,500', status: 'Partially Paid', dueDate: 'Aug 10' },
-  { id: '3', name: 'Kojo Asare', studentId: 'STU-1087', avatarBg: '#f97316', class: 'JHS 3', totalFees: 'GHS 5,000', amountPaid: 'GHS 2,000', balance: 'GHS 3,000', status: 'Overdue', dueDate: 'Aug 05' },
-  { id: '4', name: 'Akua Boateng', studentId: 'STU-1102', avatarBg: '#8b5cf6', class: 'JHS 1', totalFees: 'GHS 4,200', amountPaid: 'GHS 0', balance: 'GHS 4,200', status: 'Outstanding', dueDate: 'Aug 15' },
-];
+const PAGE_SIZE = 10;
 
-const classOutstanding = [
-  { className: 'JHS 1', amount: 'GHS 12,400', percentage: '45%' },
-  { className: 'JHS 2', amount: 'GHS 18,250', percentage: '65%' },
-  { className: 'JHS 3', amount: 'GHS 15,100', percentage: '55%' },
-  { className: 'SHS 1', amount: 'GHS 22,000', percentage: '80%' },
-  { className: 'SHS 2', amount: 'GHS 14,000', percentage: '50%' },
-  { className: 'SHS 3', amount: 'GHS 5,000', percentage: '20%' },
-];
+const getPageNumbers = (current: number, total: number): (number | '...')[] => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages: (number | '...')[] = [1];
+  if (current > 3) pages.push('...');
+  const start = Math.max(2, current - 1);
+  const end = Math.min(total - 1, current + 1);
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (current < total - 2) pages.push('...');
+  pages.push(total);
+  return pages;
+};
 
 export const AccountantFees: React.FC = () => {
+  const [records, setRecords] = useState<FeeRecord[]>([]);
+  const [stats, setStats] = useState<FeeStats | null>(null);
+  const [trend, setTrend] = useState<FeeTrendPoint[]>([]);
+  const [classOut, setClassOut] = useState<ClassOutstanding[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // filters
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClass, setSelectedClass] = useState('Class');
   const [selectedStatus, setSelectedStatus] = useState('Status');
+  const [page, setPage] = useState(1);
+
+  // More Filters panel
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState('Category');
+  const [overdueOnly, setOverdueOnly] = useState(false);
+
+  // Record Payment modal
+  const [payModalOpen, setPayModalOpen] = useState(false);
+  const [payRecord, setPayRecord] = useState<FeeRecord | null>(null);
+  const [payAmount, setPayAmount] = useState('');
+  const [payMethod, setPayMethod] = useState<'Mobile Money' | 'Bank Transfer' | 'Cash' | 'Card'>('Cash');
+  const [payReference, setPayReference] = useState('');
+  const [payNotes, setPayNotes] = useState('');
+  const [paying, setPaying] = useState(false);
+
+  // View Details modal
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsRecord, setDetailsRecord] = useState<FeeRecord | null>(null);
+  const [detailsPayments, setDetailsPayments] = useState<PaymentRow[]>([]);
+  const [detailsLoading, setDetailsLoading] = useState(false);
 
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',
@@ -74,13 +109,160 @@ export const AccountantFees: React.FC = () => {
     boxSizing: 'border-box',
   };
 
+  const overlayStyle: React.CSSProperties = {
+    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)', backdropFilter: 'blur(4px)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 1000, padding: '16px',
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [r, s, t, c] = await Promise.all([
+        getAllFeeRecords(),
+        getFeeStats(),
+        getFeeTrend(),
+        getClassOutstanding(),
+      ]);
+      setRecords(r);
+      setStats(s);
+      setTrend(t);
+      setClassOut(c);
+    } catch (err: any) {
+      setError(err?.message || 'Could not load fee data.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const categoryOptions = useMemo(
+    () => Array.from(new Set(records.map((r) => r.category).filter(Boolean))).sort(),
+    [records]
+  );
+
+  const classOptions = useMemo(
+    () => Array.from(new Set(records.map((r) => r.className).filter((c) => c && c !== '-'))).sort(),
+    [records]
+  );
+
+  const filtered = useMemo(() => {
+    return records
+      .filter((r) => {
+        if (!searchTerm.trim()) return true;
+        const q = searchTerm.toLowerCase();
+        return (
+          r.studentName.toLowerCase().includes(q) ||
+          r.studentCustomId.toLowerCase().includes(q)
+        );
+      })
+      .filter((r) => selectedClass === 'Class' || r.className === selectedClass)
+      .filter((r) => selectedStatus === 'Status' || r.status === selectedStatus)
+      .filter((r) => selectedCategory === 'Category' || r.category === selectedCategory)
+      .filter((r) => !overdueOnly || r.status === 'Overdue');
+  }, [records, searchTerm, selectedClass, selectedStatus, selectedCategory, overdueOnly]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, selectedClass, selectedStatus, selectedCategory, overdueOnly]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const pageNumbers = getPageNumbers(page, totalPages);
+
+  const donutData = useMemo(() => {
+    if (!stats) return [];
+    return [
+      { name: 'Paid', value: stats.byStatus.Paid, color: '#10b981' },
+      { name: 'Partial', value: stats.byStatus['Partially Paid'], color: '#3b82f6' },
+      { name: 'Outstanding', value: stats.byStatus.Outstanding, color: '#f59e0b' },
+      { name: 'Overdue', value: stats.byStatus.Overdue, color: '#ef4444' },
+    ].filter((d) => d.value > 0);
+  }, [stats]);
+
+  const donutTotal = donutData.reduce((a, d) => a + d.value, 0);
+
+  const collectionPct =
+    stats && stats.totalExpected > 0
+      ? Math.round((stats.totalCollected / stats.totalExpected) * 100)
+      : 0;
+
+  const openPayment = (record: FeeRecord) => {
+    setPayRecord(record);
+    setPayAmount('');
+    setPayMethod('Cash');
+    setPayReference('');
+    setPayNotes('');
+    setPayModalOpen(true);
+  };
+
+  const openDetails = async (record: FeeRecord) => {
+    setDetailsRecord(record);
+    setDetailsOpen(true);
+    setDetailsLoading(true);
+    try {
+      const list = await getPaymentsForFee(record.id);
+      setDetailsPayments(list);
+    } catch (err: any) {
+      setDetailsPayments([]);
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
+
+  const handleRecordPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!payRecord) return;
+    const amount = Number(payAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert('Enter a valid amount.');
+      return;
+    }
+    setPaying(true);
+    try {
+      await recordPayment({
+        feeId: payRecord.id,
+        studentId: payRecord.studentId,
+        amount,
+        method: payMethod,
+        reference: payReference || null,
+        notes: payNotes || null,
+      });
+      setPayModalOpen(false);
+      await load();
+    } catch (err: any) {
+      alert(err?.message || 'Could not record payment.');
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const clearAllFilters = () => {
+    setSearchTerm('');
+    setSelectedClass('Class');
+    setSelectedStatus('Status');
+    setSelectedCategory('Category');
+    setOverdueOnly(false);
+  };
+
   return (
     <AccountantLayout>
       <div style={{ padding: 'clamp(16px, 3vw, 30px)', maxWidth: '1600px', margin: '0 auto', fontFamily: "'Inter', sans-serif" }}>
-        
+
+        {error && (
+          <div style={{ backgroundColor: '#fef2f2', color: '#991b1b', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 'bold', marginBottom: '16px' }}>
+            {error}
+          </div>
+        )}
+
         {/* 4 TOP SUMMARY METRIC CARDS */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-          
+
           <div style={cardStyle}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <span style={{ fontSize: '10px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase' }}>Total Expected</span>
@@ -88,7 +270,9 @@ export const AccountantFees: React.FC = () => {
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
               </span>
             </div>
-            <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>GHS 335,250</div>
+            <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>
+              {loading || !stats ? '-' : fmtMoney(stats.totalExpected)}
+            </div>
             <span style={{ fontSize: '11px', color: '#64748b', display: 'block', marginTop: '4px' }}>All assigned fees</span>
           </div>
 
@@ -99,11 +283,13 @@ export const AccountantFees: React.FC = () => {
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
               </span>
             </div>
-            <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>GHS 248,500</div>
-            <div style={{ width: '100%', height: '6px', backgroundColor: '#f1f5f9', borderRadius: '3px', marginTop: '8px', overflow: 'hidden' }}>
-              <div style={{ width: '74%', height: '100%', backgroundColor: '#10b981' }} />
+            <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>
+              {loading || !stats ? '-' : fmtMoney(stats.totalCollected)}
             </div>
-            <span style={{ fontSize: '11px', color: '#166534', fontWeight: 'bold', display: 'block', marginTop: '4px' }}>74%</span>
+            <div style={{ width: '100%', height: '6px', backgroundColor: '#f1f5f9', borderRadius: '3px', marginTop: '8px', overflow: 'hidden' }}>
+              <div style={{ width: `${collectionPct}%`, height: '100%', backgroundColor: '#10b981' }} />
+            </div>
+            <span style={{ fontSize: '11px', color: '#166534', fontWeight: 'bold', display: 'block', marginTop: '4px' }}>{collectionPct}%</span>
           </div>
 
           <div style={cardStyle}>
@@ -113,7 +299,9 @@ export const AccountantFees: React.FC = () => {
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               </span>
             </div>
-            <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>GHS 86,750</div>
+            <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>
+              {loading || !stats ? '-' : fmtMoney(stats.totalOutstanding)}
+            </div>
             <span style={{ fontSize: '11px', color: '#64748b', display: 'block', marginTop: '4px' }}>Remaining balance</span>
           </div>
 
@@ -124,7 +312,9 @@ export const AccountantFees: React.FC = () => {
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               </span>
             </div>
-            <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>124 <span style={{ fontSize: '13px', fontWeight: 'normal', color: '#64748b' }}>Students</span></div>
+            <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f172a', marginTop: '8px' }}>
+              {loading || !stats ? '-' : <>{stats.studentsWithBalance} <span style={{ fontSize: '13px', fontWeight: 'normal', color: '#64748b' }}>Students</span></>}
+            </div>
             <span style={{ fontSize: '11px', color: '#dc2626', fontWeight: 'bold', display: 'block', marginTop: '4px' }}>Require payment action</span>
           </div>
 
@@ -132,8 +322,7 @@ export const AccountantFees: React.FC = () => {
 
         {/* TREND & DONUT CHARTS SECTION */}
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(320px, 1fr)', gap: '20px', alignItems: 'start', marginBottom: '24px' }}>
-          
-          {/* FEE COLLECTION TREND */}
+
           <div style={{ ...cardStyle, height: '100%', minHeight: '380px', display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <div>
@@ -146,16 +335,23 @@ export const AccountantFees: React.FC = () => {
             </div>
 
             <div style={{ width: '100%', height: '230px', flex: 1 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={feeTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="month" stroke="#64748b" fontSize={11} tickLine={false} />
-                  <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
-                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '12px', border: 'none' }} />
-                  <Bar dataKey="expected" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="collected" fill="#0f172a" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              {loading ? (
+                <div style={{ fontSize: '12px', color: '#64748b' }}>Loading...</div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={trend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="month" stroke="#64748b" fontSize={11} tickLine={false} />
+                    <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '12px', border: 'none' }}
+                      formatter={(v: any) => fmtMoney(Number(v ?? 0))}
+                    />
+                    <Bar dataKey="expected" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="collected" fill="#0f172a" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
 
             <div style={{ display: 'flex', gap: '20px', fontSize: '11px', fontWeight: 'bold', color: '#64748b', marginTop: '12px' }}>
@@ -164,42 +360,39 @@ export const AccountantFees: React.FC = () => {
             </div>
           </div>
 
-          {/* PAYMENT STATUS BREAKDOWN */}
           <div style={{ ...cardStyle, textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: '100%', minHeight: '380px' }}>
             <div style={{ textAlign: 'left' }}>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Payment Status Breakdown</h3>
             </div>
 
             <div style={{ width: '100%', height: '180px', position: 'relative' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '12px', border: 'none' }} />
-                  <Pie
-                    data={paymentStatusData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={75}
-                    paddingAngle={4}
-                    dataKey="value"
-                  >
-                    {paymentStatusData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-              <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                <div style={{ fontSize: '18px', fontWeight: '900', color: '#0f172a' }}>210</div>
-                <span style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b', textTransform: 'uppercase' }}>Total</span>
-              </div>
+              {loading || donutTotal === 0 ? (
+                <div style={{ paddingTop: '60px', fontSize: '12px', color: '#64748b' }}>No fee records yet.</div>
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Tooltip contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '12px', border: 'none' }} />
+                      <Pie data={donutData} cx="50%" cy="50%" innerRadius={55} outerRadius={75} paddingAngle={4} dataKey="value">
+                        {donutData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                    <div style={{ fontSize: '18px', fontWeight: '900', color: '#0f172a' }}>{donutTotal}</div>
+                    <span style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b', textTransform: 'uppercase' }}>Total</span>
+                  </div>
+                </>
+              )}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '11px', fontWeight: 'bold', color: '#334155', textAlign: 'left' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#10b981', borderRadius: '50%' }} /> Paid (86)</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#3b82f6', borderRadius: '50%' }} /> Partial (42)</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#f59e0b', borderRadius: '50%' }} /> Outstanding (58)</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%' }} /> Overdue (24)</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#10b981', borderRadius: '50%' }} /> Paid ({stats?.byStatus.Paid ?? 0})</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#3b82f6', borderRadius: '50%' }} /> Partial ({stats?.byStatus['Partially Paid'] ?? 0})</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#f59e0b', borderRadius: '50%' }} /> Outstanding ({stats?.byStatus.Outstanding ?? 0})</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%' }} /> Overdue ({stats?.byStatus.Overdue ?? 0})</div>
             </div>
           </div>
 
@@ -210,72 +403,108 @@ export const AccountantFees: React.FC = () => {
           <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Outstanding Fees by Class</h3>
           <span style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '20px' }}>See which classes have the highest outstanding balances.</span>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
-            {classOutstanding.map((cls) => (
-              <div key={cls.className} style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', color: '#0f172a', marginBottom: '8px' }}>
-                  <span>{cls.className}</span>
-                  <span style={{ color: '#d97706' }}>{cls.amount}</span>
+          {loading ? (
+            <div style={{ fontSize: '12px', color: '#64748b' }}>Loading...</div>
+          ) : classOut.length === 0 ? (
+            <div style={{ fontSize: '12px', color: '#64748b' }}>No outstanding balances.</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
+              {classOut.map((cls) => (
+                <div key={cls.className} style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', color: '#0f172a', marginBottom: '8px' }}>
+                    <span>{cls.className}</span>
+                    <span style={{ color: '#d97706' }}>{fmtMoney(cls.amount)}</span>
+                  </div>
+                  <div style={{ width: '100%', height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                    <div style={{ width: `${cls.percentOfMax}%`, height: '100%', backgroundColor: '#f59e0b' }} />
+                  </div>
                 </div>
-                <div style={{ width: '100%', height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
-                  <div style={{ width: cls.percentage, height: '100%', backgroundColor: '#f59e0b' }} />
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* STUDENT FEE RECORDS TABLE */}
         <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-          
+
           <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
             <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Student Fee Records</h3>
 
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '6px 12px', width: '240px' }}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input 
-                  type="text" 
-                  placeholder="Search student..." 
+                <input
+                  type="text"
+                  placeholder="Search student..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   style={{ border: 'none', background: 'none', outline: 'none', fontSize: '12px', width: '100%', color: '#0f172a' }}
                 />
               </div>
 
-              <select 
-                value={selectedClass} 
+              <select
+                value={selectedClass}
                 onChange={(e) => setSelectedClass(e.target.value)}
                 style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
               >
-                <option>Class</option>
-                <option>JHS 1</option>
-                <option>JHS 2</option>
-                <option>JHS 3</option>
+                <option value="Class">Class</option>
+                {classOptions.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
               </select>
 
-              <select 
-                value={selectedStatus} 
+              <select
+                value={selectedStatus}
                 onChange={(e) => setSelectedStatus(e.target.value)}
                 style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
               >
-                <option>Status</option>
-                <option>Paid</option>
-                <option>Partially Paid</option>
-                <option>Overdue</option>
-                <option>Outstanding</option>
+                <option value="Status">Status</option>
+                <option value="Paid">Paid</option>
+                <option value="Partially Paid">Partially Paid</option>
+                <option value="Overdue">Overdue</option>
+                <option value="Outstanding">Outstanding</option>
               </select>
 
-              <button style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button
+                onClick={() => setMoreFiltersOpen((v) => !v)}
+                style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: moreFiltersOpen ? '#f0f9ff' : '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
                 More Filters
               </button>
 
-              <button style={{ border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#64748b', cursor: 'pointer' }}>
+              <button
+                onClick={clearAllFilters}
+                style={{ border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#64748b', cursor: 'pointer' }}
+              >
                 Clear
               </button>
             </div>
           </div>
+
+          {moreFiltersOpen && (
+            <div style={{ padding: '12px 20px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
+              >
+                <option value="Category">Category</option>
+                {categoryOptions.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={overdueOnly}
+                  onChange={(e) => setOverdueOnly(e.target.checked)}
+                />
+                Overdue only
+              </label>
+            </div>
+          )}
 
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left', minWidth: '700px' }}>
@@ -292,37 +521,59 @@ export const AccountantFees: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {mockFeeRecords.map((record) => (
+                {loading && (
+                  <tr>
+                    <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>Loading...</td>
+                  </tr>
+                )}
+                {!loading && paginated.length === 0 && (
+                  <tr>
+                    <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
+                      No fee records match your filters.
+                    </td>
+                  </tr>
+                )}
+                {!loading && paginated.map((record) => (
                   <tr key={record.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: record.avatarBg, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 'bold' }}>
-                        {record.name.split(' ').map(n => n[0]).join('')}
-                      </div>
-                      <div>
-                        <strong style={{ color: '#0f172a', display: 'block' }}>{record.name}</strong>
-                        <span style={{ fontSize: '10px', color: '#64748b' }}>{record.studentId}</span>
+                    <td style={{ padding: '12px 20px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: '#002b49', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 'bold', flexShrink: 0 }}>
+                          {record.studentInitials}
+                        </div>
+                        <div>
+                          <strong style={{ color: '#0f172a', display: 'block' }}>{record.studentName}</strong>
+                          <span style={{ fontSize: '10px', color: '#64748b' }}>{record.studentCustomId}</span>
+                        </div>
                       </div>
                     </td>
-                    <td style={{ padding: '12px 20px', color: '#334155', fontWeight: 'bold' }}>{record.class}</td>
-                    <td style={{ padding: '12px 20px', color: '#334155' }}>{record.totalFees}</td>
-                    <td style={{ padding: '12px 20px', color: '#166534', fontWeight: 'bold' }}>{record.amountPaid}</td>
-                    <td style={{ padding: '12px 20px', color: record.balance === 'GHS 0' ? '#166534' : '#dc2626', fontWeight: 'bold' }}>{record.balance}</td>
+                    <td style={{ padding: '12px 20px', color: '#334155', fontWeight: 'bold' }}>{record.className}</td>
+                    <td style={{ padding: '12px 20px', color: '#334155' }}>{fmtMoney(record.totalFees)}</td>
+                    <td style={{ padding: '12px 20px', color: '#166534', fontWeight: 'bold' }}>{fmtMoney(record.amountPaid)}</td>
+                    <td style={{ padding: '12px 20px', color: record.balance === 0 ? '#166534' : '#dc2626', fontWeight: 'bold' }}>{fmtMoney(record.balance)}</td>
                     <td style={{ padding: '12px 20px' }}>
-                      <span style={{ 
-                        backgroundColor: record.status === 'Paid' ? '#dcfce7' : record.status === 'Partially Paid' ? '#e0f2fe' : record.status === 'Overdue' ? '#fee2e2' : '#fef3c7', 
-                        color: record.status === 'Paid' ? '#166534' : record.status === 'Partially Paid' ? '#0369a1' : record.status === 'Overdue' ? '#991b1b' : '#b45309', 
-                        padding: '3px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold' 
+                      <span style={{
+                        backgroundColor: record.status === 'Paid' ? '#dcfce7' : record.status === 'Partially Paid' ? '#e0f2fe' : record.status === 'Overdue' ? '#fee2e2' : '#fef3c7',
+                        color: record.status === 'Paid' ? '#166534' : record.status === 'Partially Paid' ? '#0369a1' : record.status === 'Overdue' ? '#991b1b' : '#b45309',
+                        padding: '3px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold'
                       }}>
                         {record.status}
                       </span>
                     </td>
-                    <td style={{ padding: '12px 20px', color: record.status === 'Overdue' ? '#dc2626' : '#64748b', fontWeight: record.status === 'Overdue' ? 'bold' : 'normal' }}>{record.dueDate}</td>
+                    <td style={{ padding: '12px 20px', color: record.status === 'Overdue' ? '#dc2626' : '#64748b', fontWeight: record.status === 'Overdue' ? 'bold' : 'normal' }}>{fmtDate(record.dueDate)}</td>
                     <td style={{ padding: '12px 20px', textAlign: 'right' }}>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', alignItems: 'center' }}>
-                        <button title="View Details" style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b', padding: '4px' }}>
+                        <button
+                          title="View Details"
+                          onClick={() => void openDetails(record)}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b', padding: '4px' }}
+                        >
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                         </button>
-                        <button title="Record Payment" style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b', padding: '4px' }}>
+                        <button
+                          title="Record Payment"
+                          onClick={() => openPayment(record)}
+                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#002b49', padding: '4px' }}
+                        >
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
                         </button>
                       </div>
@@ -334,19 +585,245 @@ export const AccountantFees: React.FC = () => {
           </div>
 
           <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#64748b', flexWrap: 'wrap', gap: '10px' }}>
-            <div>Showing <strong>1-10</strong> of <strong>124</strong> students</div>
+            <div>
+              Showing <strong>{filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, filtered.length)}</strong> of <strong>{filtered.length}</strong> records
+            </div>
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-              <button style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#334155' }}>Previous</button>
-              <button style={{ padding: '4px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#0f172a', color: '#ffffff', fontWeight: 'bold', cursor: 'pointer' }}>1</button>
-              <button style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#334155' }}>2</button>
-              <button style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#334155' }}>3</button>
-              <span>...</span>
-              <button style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#334155' }}>13</button>
-              <button style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#334155' }}>Next</button>
+              <button
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: page <= 1 ? 'not-allowed' : 'pointer', color: '#334155', opacity: page <= 1 ? 0.5 : 1 }}
+              >
+                Previous
+              </button>
+              {pageNumbers.map((n, idx) =>
+                n === '...' ? (
+                  <span key={`gap-${idx}`} style={{ padding: '0 4px', color: '#94a3b8' }}>...</span>
+                ) : (
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      border: page === n ? 'none' : '1px solid #cbd5e1',
+                      backgroundColor: page === n ? '#0f172a' : '#ffffff',
+                      color: page === n ? '#ffffff' : '#334155',
+                      fontWeight: page === n ? 'bold' : 'normal',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {n}
+                  </button>
+                )
+              )}
+              <button
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: page >= totalPages ? 'not-allowed' : 'pointer', color: '#334155', opacity: page >= totalPages ? 0.5 : 1 }}
+              >
+                Next
+              </button>
             </div>
           </div>
 
         </div>
+
+        {/* RECORD PAYMENT MODAL */}
+        {payModalOpen && payRecord && (
+          <div style={overlayStyle} onClick={() => !paying && setPayModalOpen(false)}>
+            <div
+              style={{ backgroundColor: '#ffffff', borderRadius: '16px', width: '100%', maxWidth: '520px', overflow: 'hidden', fontFamily: "'Inter', sans-serif" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Record Payment</h3>
+                <button onClick={() => !paying && setPayModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>X</button>
+              </div>
+
+              <form onSubmit={handleRecordPayment}>
+                <div style={{ padding: '24px' }}>
+                  <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginBottom: '16px' }}>
+                    <div style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '14px' }}>{payRecord.studentName}</div>
+                    <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                      {payRecord.studentCustomId} | {payRecord.className} | {payRecord.category}
+                    </div>
+                    <div style={{ display: 'flex', gap: '20px', marginTop: '10px', fontSize: '12px' }}>
+                      <div><span style={{ color: '#64748b' }}>Total:</span> <strong>{fmtMoney(payRecord.totalFees)}</strong></div>
+                      <div><span style={{ color: '#64748b' }}>Paid:</span> <strong style={{ color: '#166534' }}>{fmtMoney(payRecord.amountPaid)}</strong></div>
+                      <div><span style={{ color: '#64748b' }}>Balance:</span> <strong style={{ color: '#dc2626' }}>{fmtMoney(payRecord.balance)}</strong></div>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '14px' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Amount *</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={payAmount}
+                      onChange={(e) => setPayAmount(e.target.value)}
+                      placeholder={`Max ${fmtMoney(payRecord.balance)}`}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: '14px' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Method *</label>
+                    <select
+                      value={payMethod}
+                      onChange={(e) => setPayMethod(e.target.value as any)}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                    >
+                      <option value="Cash">Cash</option>
+                      <option value="Mobile Money">Mobile Money</option>
+                      <option value="Bank Transfer">Bank Transfer</option>
+                      <option value="Card">Card</option>
+                    </select>
+                  </div>
+
+                  <div style={{ marginBottom: '14px' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Reference (optional)</label>
+                    <input
+                      type="text"
+                      value={payReference}
+                      onChange={(e) => setPayReference(e.target.value)}
+                      placeholder="e.g. MoMo transaction ID"
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Notes</label>
+                    <textarea
+                      rows={2}
+                      value={payNotes}
+                      onChange={(e) => setPayNotes(e.target.value)}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box', resize: 'vertical' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                  <button
+                    type="button"
+                    onClick={() => !paying && setPayModalOpen(false)}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={paying}
+                    style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: paying ? 'wait' : 'pointer', opacity: paying ? 0.7 : 1 }}
+                  >
+                    {paying ? 'Recording...' : 'Record Payment'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW DETAILS MODAL */}
+        {detailsOpen && detailsRecord && (
+          <div style={overlayStyle} onClick={() => setDetailsOpen(false)}>
+            <div
+              style={{ backgroundColor: '#ffffff', borderRadius: '16px', width: '100%', maxWidth: '720px', maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', fontFamily: "'Inter', sans-serif" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>{detailsRecord.studentName}</h3>
+                  <span style={{ fontSize: '11px', color: '#64748b' }}>
+                    {detailsRecord.studentCustomId} | {detailsRecord.className} | {detailsRecord.category}
+                  </span>
+                </div>
+                <button onClick={() => setDetailsOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>X</button>
+              </div>
+
+              <div style={{ padding: '20px 24px', overflowY: 'auto' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                  <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '12px' }}>
+                    <div style={{ fontSize: '10px', color: '#64748b', fontWeight: 'bold', textTransform: 'uppercase' }}>Total Fees</div>
+                    <div style={{ fontSize: '18px', fontWeight: '900', color: '#0f172a', marginTop: '4px' }}>{fmtMoney(detailsRecord.totalFees)}</div>
+                  </div>
+                  <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '12px' }}>
+                    <div style={{ fontSize: '10px', color: '#166534', fontWeight: 'bold', textTransform: 'uppercase' }}>Amount Paid</div>
+                    <div style={{ fontSize: '18px', fontWeight: '900', color: '#166534', marginTop: '4px' }}>{fmtMoney(detailsRecord.amountPaid)}</div>
+                  </div>
+                  <div style={{ backgroundColor: detailsRecord.balance === 0 ? '#f0fdf4' : '#fef2f2', border: `1px solid ${detailsRecord.balance === 0 ? '#bbf7d0' : '#fecaca'}`, borderRadius: '10px', padding: '12px' }}>
+                    <div style={{ fontSize: '10px', color: detailsRecord.balance === 0 ? '#166534' : '#991b1b', fontWeight: 'bold', textTransform: 'uppercase' }}>Balance</div>
+                    <div style={{ fontSize: '18px', fontWeight: '900', color: detailsRecord.balance === 0 ? '#166534' : '#991b1b', marginTop: '4px' }}>{fmtMoney(detailsRecord.balance)}</div>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', marginBottom: '10px' }}>
+                  Payment History
+                </div>
+
+                {detailsLoading ? (
+                  <div style={{ fontSize: '12px', color: '#64748b', padding: '20px', textAlign: 'center' }}>Loading...</div>
+                ) : detailsPayments.length === 0 ? (
+                  <div style={{ fontSize: '12px', color: '#64748b', padding: '20px', textAlign: 'center', backgroundColor: '#f8fafc', borderRadius: '10px' }}>
+                    No payments recorded yet for this student.
+                  </div>
+                ) : (
+                  <div style={{ border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
+                      <thead>
+                        <tr style={{ backgroundColor: '#f8fafc', color: '#64748b', fontSize: '10px', fontWeight: '800' }}>
+                          <th style={{ padding: '10px 14px' }}>DATE</th>
+                          <th style={{ padding: '10px 14px' }}>AMOUNT</th>
+                          <th style={{ padding: '10px 14px' }}>METHOD</th>
+                          <th style={{ padding: '10px 14px' }}>REFERENCE</th>
+                          <th style={{ padding: '10px 14px' }}>STATUS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailsPayments.map((p) => (
+                          <tr key={p.id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '10px 14px', color: '#64748b' }}>{fmtDateTime(p.paidAt)}</td>
+                            <td style={{ padding: '10px 14px', fontWeight: 'bold', color: '#166534' }}>{fmtMoney(p.amount)}</td>
+                            <td style={{ padding: '10px 14px', color: '#334155' }}>{p.method}</td>
+                            <td style={{ padding: '10px 14px', color: '#64748b' }}>{p.reference || '-'}</td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <span style={{
+                                backgroundColor: p.status === 'Completed' ? '#dcfce7' : p.status === 'Pending' ? '#fef3c7' : '#fee2e2',
+                                color: p.status === 'Completed' ? '#166534' : p.status === 'Pending' ? '#92400e' : '#991b1b',
+                                padding: '2px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold'
+                              }}>
+                                {p.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button
+                  onClick={() => setDetailsOpen(false)}
+                  style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => {
+                    setDetailsOpen(false);
+                    openPayment(detailsRecord);
+                  }}
+                  style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}
+                >
+                  Record Payment
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </AccountantLayout>

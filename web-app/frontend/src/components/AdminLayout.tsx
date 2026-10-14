@@ -1,5 +1,8 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { supabase } from '../services/supabase';
+import { getMyProfile } from '../services/teacherService';
+import type { MyProfile } from '../services/teacherService';
 
 interface AdminLayoutProps {
   children: React.ReactNode;
@@ -12,6 +15,30 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
   
   const [isCollapsed, setIsCollapsed] = useState(() => window.innerWidth < 1024);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [me, setMe] = useState<MyProfile | null>(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    getMyProfile().then(setMe).catch(() => setMe(null));
+  }, []);
+
+  useEffect(() => {
+    if (me?.mustChangePassword && location.pathname !== '/change-password') {
+      navigate('/change-password');
+    }
+  }, [me, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [profileMenuOpen]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -214,67 +241,179 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
           </nav>
         </div>
 
-        {/* SIDEBAR FOOTER */}
-        <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          
-          {/* PROFILE CLICKABLE ZONE */}
-          <div 
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate('/profile');
-            }}
-            title={isCollapsed ? 'Kwame Mensah Profile' : undefined}
-            style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: isCollapsed ? 'center' : 'flex-start', 
-              gap: '8px', 
-              padding: '6px 8px', 
-              borderRadius: '6px', 
-              cursor: 'pointer',
-              backgroundColor: location.pathname === '/profile' ? theme.activeNavBg : 'transparent',
-              transition: 'background-color 0.15s ease'
-            }}
-          >
-            <img 
-              src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=60" 
-              alt="Kwame Mensah" 
-              style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover' }} 
-            />
-            {!isCollapsed && (
-              <div style={{ minWidth: 0 }}>
-                <span style={{ fontSize: '12px', fontWeight: 'bold', color: location.pathname === '/profile' ? theme.activeNavText : theme.text, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  Kwame Mensah
-                </span>
-                <span style={{ fontSize: '10px', color: theme.subText, display: 'block' }}>Administrator</span>
-              </div>
-            )}
-          </div>
-
-          {/* LOGOUT BUTTON */}
-          <button 
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              navigate('/login');
-            }} 
-            title={isCollapsed ? 'Logout' : undefined}
-            style={{ 
-              border: 'none', 
-              background: 'none', 
-              padding: '6px 8px', 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: isCollapsed ? 'center' : 'flex-start', 
-              gap: '8px', 
-              cursor: 'pointer',
+{/* SIDEBAR FOOTER — profile row + 3-dot menu */}
+        <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '10px' }}>
+          <div
+            ref={profileMenuRef}
+            style={{
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: isCollapsed ? 'center' : 'space-between',
+              gap: '6px',
+              padding: '6px 8px',
               borderRadius: '6px'
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-            {!isCollapsed && <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#ef4444' }}>Logout</span>}
-          </button>
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate('/profile');
+              }}
+              title={isCollapsed ? (me?.fullName || 'Admin') : undefined}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                minWidth: 0,
+                flex: 1,
+                cursor: 'pointer'
+              }}
+            >
+              {me?.avatarUrl ? (
+                <img
+                  src={me.avatarUrl}
+                  alt={me?.fullName || 'Admin'}
+                  style={{ width: '28px', height: '28px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '50%',
+                    backgroundColor: '#cbd5e1',
+                    color: '#334155',
+                    fontWeight: 'bold',
+                    fontSize: '11px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                  }}
+                >
+                  {((me?.firstName?.[0] ?? '') + (me?.lastName?.[0] ?? '')).toUpperCase() || 'A'}
+                </div>
+              )}
+              {!isCollapsed && (
+                <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 'bold', color: theme.text, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {me?.fullName || 'Admin'}
+                  </span>
+                  <span style={{ fontSize: '10px', color: theme.subText, display: 'block' }}>
+                    {me?.role ? me.role.charAt(0).toUpperCase() + me.role.slice(1) : 'Administrator'}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setProfileMenuOpen(!profileMenuOpen);
+              }}
+              title="Menu"
+              style={{
+                border: 'none',
+                background: 'none',
+                padding: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                borderRadius: '6px',
+                color: theme.iconColor,
+                flexShrink: 0
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle cx="12" cy="5" r="1.5" fill="currentColor" />
+                <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+                <circle cx="12" cy="19" r="1.5" fill="currentColor" />
+              </svg>
+            </button>
+
+            {profileMenuOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '100%',
+                  right: 0,
+                  marginBottom: '6px',
+                  minWidth: '180px',
+                  backgroundColor: theme.sidebarBg,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '10px',
+                  boxShadow: '0 10px 25px -5px rgba(0,0,0,0.15)',
+                  overflow: 'hidden',
+                  zIndex: 200
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setProfileMenuOpen(false);
+                    navigate('/profile');
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    textAlign: 'left',
+                    border: 'none',
+                    background: 'transparent',
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                    color: theme.text,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                  My Profile
+                </button>
+
+                <div style={{ borderTop: `1px solid ${theme.border}` }} />
+
+                <button
+                  type="button"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setProfileMenuOpen(false);
+                    if (!confirm('Log out of SABIO?')) return;
+                    try { await supabase.auth.signOut(); } catch {}
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('user_role');
+                    localStorage.removeItem('user_email');
+                    localStorage.removeItem('user_first_name');
+                    navigate('/login');
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    textAlign: 'left',
+                    border: 'none',
+                    background: 'transparent',
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                    color: '#ef4444',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                  Logout
+                </button>
+              </div>
+            )}
+          </div>
         </div>
+
       </aside>
 
       {/* 2. MAIN WORKSPACE CONTAINER */}
@@ -354,7 +493,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
 
           {/* FOOTER */}
           <footer style={{ height: '40px', backgroundColor: theme.sidebarBg, borderTop: `1px solid ${theme.border}`, padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: theme.subText, flexShrink: 0 }}>
-            <div><strong>© 2026 SABIO SMIS v2.4.0</strong></div>
+            <div><strong>Â© 2026 SABIO SMIS v2.4.0</strong></div>
             <div style={{ display: 'flex', gap: '16px' }}>
               <span style={{ cursor: 'pointer' }}>Support Center</span>
               <span style={{ cursor: 'pointer' }}>Privacy Policy</span>
@@ -368,3 +507,5 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
     </div>
   );
 };
+
+

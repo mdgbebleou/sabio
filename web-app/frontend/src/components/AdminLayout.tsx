@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../services/supabase';
 import { getMyProfile } from '../services/teacherService';
@@ -493,7 +493,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
 
           {/* FOOTER */}
           <footer style={{ height: '40px', backgroundColor: theme.sidebarBg, borderTop: `1px solid ${theme.border}`, padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: theme.subText, flexShrink: 0 }}>
-            <div><strong>Â© 2026 SABIO SMIS v2.4.0</strong></div>
+            <div><strong>© 2026 SABIO SMIS v2.4.0</strong></div>
             <div style={{ display: 'flex', gap: '16px' }}>
               <span style={{ cursor: 'pointer' }}>Support Center</span>
               <span style={{ cursor: 'pointer' }}>Privacy Policy</span>

@@ -6,7 +6,7 @@ import ParentLayout from '../../components/ParentLayout';
 import { supabase } from '../services/supabase';
 import { useTheme } from '@/hooks/use-theme';
 import { useStudent } from '../context/StudentContext';
-import { AIInsightsCard } from '../../components/AIInsightsCard'; // ✨ 1. Imported the AI component
+import { AIInsightsCard } from '../../components/AIInsightsCard'; 
 
 interface LinkedStudent {
   id: string;
@@ -56,11 +56,9 @@ const ParentDashboard: React.FC = () => {
           return;
         }
 
-        // 1. Clear stale context data immediately for fresh session isolation
         setLinkedStudents([]);
         setSelectedStudent(null);
 
-        // 2. Fetch Parent Profile First Name (Ensuring a clean name is ALWAYS displayed)
         const { data: profileData } = await supabase
           .from('profiles')
           .select('first_name, full_name, name, username')
@@ -78,14 +76,12 @@ const ParentDashboard: React.FC = () => {
             session.user.user_metadata?.name ||
             (session.user.email ? session.user.email.split('@')[0] : 'User');
 
-          // Extract the first word/name and capitalize it nicely
           const firstName = rawName.toString().trim().split(' ')[0];
           const capitalizedName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
 
           setParentFirstName(capitalizedName);
         }
 
-        // 3. Check for unread notifications for badge
         const { count: unreadNotifCount } = await supabase
           .from('notifications')
           .select('*', { count: 'exact', head: true })
@@ -96,28 +92,69 @@ const ParentDashboard: React.FC = () => {
           setHasUnreadNotifications((unreadNotifCount || 0) > 0);
         }
 
-        // 4. Fetch Linked Students strictly scoped to current session user id
         const { data: studentsData } = await supabase
           .from('students')
           .select('*')
           .eq('parent_id', session.user.id);
 
         if (studentsData && studentsData.length > 0 && isMounted) {
-          const formattedStudents: LinkedStudent[] = studentsData.map((st: Record<string, unknown>) => ({
-            id: st.id as string,
-            firstName: (st.first_name as string) || '',
-            lastName: (st.last_name as string) || '',
-            className: (st.class_name as string) || 'Unassigned',
-            customId: (st.custom_id as string) || '',
-            avatarUrl: (st.avatar_url as string) || undefined,
-            attendancePercentage: (st.attendance_score as number) || 100,
-            academicAverage: (st.academic_score as number) || 0,
-            outstandingBalance: (st.outstanding_balance as number) || 0,
-            totalFees: (st.total_fees as number) || 0,
-            paidFees: (st.paid_fees as number) || 0,
-            unreadMessagesCount: (st.unread_messages_count as number) || 0,
-            subjects: (st.subjects as Array<{ name: string; score: number }>) || [],
-          }));
+          const formattedStudents: LinkedStudent[] = await Promise.all(
+            studentsData.map(async (st: Record<string, unknown>) => {
+              const studentId = st.id as string;
+
+              const { data: scoresData } = await supabase
+                .from('scores')
+                .select(`
+                  total_score,
+                  assessments (
+                    subject
+                  )
+                `)
+                .eq('student_id', studentId);
+
+              const subjectsMap: { [key: string]: { total: number; count: number } } = {};
+              
+              if (scoresData && scoresData.length > 0) {
+                scoresData.forEach((scoreRow: any) => {
+                  const subjectName = scoreRow.assessments?.subject || 'General';
+                  const scoreVal = Number(scoreRow.total_score) || 0;
+                  
+                  if (!subjectsMap[subjectName]) {
+                    subjectsMap[subjectName] = { total: 0, count: 0 };
+                  }
+                  subjectsMap[subjectName].total += scoreVal;
+                  subjectsMap[subjectName].count += 1;
+                });
+              }
+
+              const formattedSubjects = Object.keys(subjectsMap).map(subName => ({
+                name: subName,
+                score: Math.round(subjectsMap[subName].total / subjectsMap[subName].count)
+              }));
+
+              let computedAverage = (st.academic_score as number) || 0;
+              if (formattedSubjects.length > 0) {
+                const sumScores = formattedSubjects.reduce((acc, curr) => acc + curr.score, 0);
+                computedAverage = Math.round(sumScores / formattedSubjects.length);
+              }
+
+              return {
+                id: studentId,
+                firstName: (st.first_name as string) || '',
+                lastName: (st.last_name as string) || '',
+                className: (st.class_name as string) || 'Unassigned',
+                customId: (st.custom_id as string) || '',
+                avatarUrl: (st.avatar as string) || undefined,
+                attendancePercentage: (st.attendance_score as number) || 100,
+                academicAverage: computedAverage,
+                outstandingBalance: (st.outstanding_balance as number) || 0,
+                totalFees: (st.total_fees as number) || 0,
+                paidFees: (st.paid_fees as number) || 0,
+                unreadMessagesCount: (st.unread_messages_count as number) || 0,
+                subjects: formattedSubjects,
+              };
+            })
+          );
 
           setLinkedStudents(formattedStudents);
           setSelectedStudent(formattedStudents[0]);
@@ -167,19 +204,9 @@ const ParentDashboard: React.FC = () => {
             <TouchableOpacity
               onPress={() => router.push('/calendar' as any)}
               style={{
-                width: 44,
-                height: 44,
-                borderRadius: 22,
-                backgroundColor: theme.card,
-                borderWidth: 1,
-                borderColor: theme.border,
-                alignItems: 'center',
-                justifyContent: 'center',
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.03,
-                shadowRadius: 8,
-                elevation: 2
+                width: 44, height: 44, borderRadius: 22, backgroundColor: theme.card,
+                borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center',
+                shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 8, elevation: 2
               }}
             >
               <Ionicons name="calendar-outline" size={20} color={theme.text} />
@@ -191,20 +218,9 @@ const ParentDashboard: React.FC = () => {
                 router.push('/notifications' as any);
               }}
               style={{
-                width: 44,
-                height: 44,
-                borderRadius: 22,
-                backgroundColor: theme.card,
-                borderWidth: 1,
-                borderColor: theme.border,
-                alignItems: 'center',
-                justifyContent: 'center',
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.03,
-                shadowRadius: 8,
-                elevation: 2,
-                position: 'relative'
+                width: 44, height: 44, borderRadius: 22, backgroundColor: theme.card,
+                borderWidth: 1, borderColor: theme.border, alignItems: 'center', justifyContent: 'center',
+                shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 8, elevation: 2, position: 'relative'
               }}
             >
               <Ionicons name="notifications-outline" size={20} color={theme.text} />
@@ -215,12 +231,48 @@ const ParentDashboard: React.FC = () => {
           </View>
         </View>
 
-        {/* ✨ 2. AI INTELLIGENCE CARD PLACED HERE FOR EASY ACCESS */}
-        <AIInsightsCard 
-          appType="parent" 
-          moduleName="calendar" 
-          title="Parent AI Support Assistant" 
-        />
+        {/* ✨ AI INTELLIGENCE CARD WITH MANUAL REFRESH & CHAT ROUTING */}
+        <TouchableOpacity 
+          activeOpacity={0.9}
+          onPress={() => router.push('/ai-assistant' as any)}
+        >
+          <AIInsightsCard 
+            appType="parent" 
+            moduleName="calendar" 
+            title="Parent AI Support Assistant" 
+          />
+        </TouchableOpacity>
+
+        {/* PREDICTIVE QUICK-QUESTION CHIPS (PILLS) */}
+        <ScrollView horizontal showsHorizontalIndicator={false} style={{ marginBottom: 20, marginTop: -4 }}>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {[
+              "How are my child's grades?",
+              "Check attendance status",
+              "Compare my kids' progress",
+              "Upcoming school fees?"
+            ].map((question, i) => (
+              <TouchableOpacity
+                key={i}
+                onPress={() => router.push({ pathname: '/ai-assistant', params: { initialQuery: question } } as any)}
+                style={{
+                  backgroundColor: theme.card,
+                  borderWidth: 1,
+                  borderColor: theme.border,
+                  paddingHorizontal: 14,
+                  paddingVertical: 8,
+                  borderRadius: 16,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: 0.02,
+                  elevation: 1
+                }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '600', color: theme.tint }}>💬 {question}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
 
         {linkedStudents.length === 0 ? (
           <View style={{ backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border, borderRadius: 20, padding: 40, alignItems: 'center', marginTop: 20 }}>
@@ -238,20 +290,10 @@ const ParentDashboard: React.FC = () => {
                   setIsChildSelectorOpen(true);
                 }}
                 style={{
-                  backgroundColor: theme.card,
-                  borderWidth: 1,
-                  borderColor: theme.border,
-                  borderRadius: 20,
-                  padding: 14,
-                  marginBottom: 20,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.03,
-                  shadowRadius: 8,
-                  elevation: 2
+                  backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border,
+                  borderRadius: 20, padding: 14, marginBottom: 20, flexDirection: 'row',
+                  alignItems: 'center', justifyContent: 'space-between',
+                  shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.03, shadowRadius: 8, elevation: 2
                 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -394,14 +436,9 @@ const ParentDashboard: React.FC = () => {
                         key={child.id}
                         onPress={() => setTempSelectedStudent(child)}
                         style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: 16,
-                          borderRadius: 20,
-                          borderWidth: isSelected ? 2 : 1,
-                          borderColor: isSelected ? theme.tint : theme.border,
-                          backgroundColor: theme.card
+                          flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                          padding: 16, borderRadius: 20, borderWidth: isSelected ? 2 : 1,
+                          borderColor: isSelected ? theme.tint : theme.border, backgroundColor: theme.card
                         }}
                       >
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>

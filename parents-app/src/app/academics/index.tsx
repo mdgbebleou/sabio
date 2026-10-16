@@ -1,15 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, Image, TouchableOpacity, ScrollView, ActivityIndicator, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import ParentLayout from '../../components/ParentLayout';
+import ParentLayout from '../../../components/ParentLayout';
 import { useTheme } from '@/hooks/use-theme';
-import { useStudent } from '../context/StudentContext';
+import { useStudent } from '@/context/StudentContext';
+import { supabase } from '../../services/supabase';
 
 interface SubjectPerformance {
   name: string;
   score: number;
-  gradeRemark: 'Excellent' | 'Good' | 'Average' | 'Needs Improvement';
+  assessmentTitle?: string;
+  gradeRemark: 'Distinction' | 'Above Average' | 'Satisfactory' | 'Pass' | 'Needs Improvement';
 }
 
 interface StudentAcademicRecord {
@@ -24,7 +26,6 @@ interface StudentAcademicRecord {
   subjects: SubjectPerformance[];
 }
 
-// Helper to determine dynamic, industry-standard academic performance remarks
 const getAcademicRemark = (score: number) => {
   if (score >= 85) return { label: 'Distinction', bg: '#dcfce7', color: '#166534' };
   if (score >= 75) return { label: 'Above Average', bg: '#dbeafe', color: '#1e40af' };
@@ -37,47 +38,113 @@ const AcademicsScreen: React.FC = () => {
   const theme = useTheme();
   const router = useRouter();
   
-  // Consume global student context
   const { selectedStudent, setSelectedStudent, linkedStudents: rawLinkedStudents, loadingStudents } = useStudent();
   
   const [isChildSelectorOpen, setIsChildSelectorOpen] = useState(false);
   const [tempSelectedStudent, setTempSelectedStudent] = useState<StudentAcademicRecord | null>(null);
+  const [studentAcademicData, setStudentAcademicData] = useState<StudentAcademicRecord[]>([]);
+  const [loadingAcademics, setLoadingAcademics] = useState(true);
 
-  // Map raw context students to local academic view model
-  const linkedStudents: StudentAcademicRecord[] = rawLinkedStudents.map((st) => {
-    const rawSubjects = st.subjects || [];
-    const formattedSubjects: SubjectPerformance[] = rawSubjects.map(sub => ({
-      name: sub.name,
-      score: sub.score,
-      gradeRemark: sub.score >= 80 ? 'Excellent' : sub.score >= 70 ? 'Good' : sub.score >= 50 ? 'Average' : 'Needs Improvement'
-    }));
+  const fetchStudentAcademics = useCallback(async () => {
+    try {
+      setLoadingAcademics(true);
+      if (!rawLinkedStudents || rawLinkedStudents.length === 0) {
+        setStudentAcademicData([]);
+        setLoadingAcademics(false);
+        return;
+      }
 
-    const avgScore = st.academicAverage || 0;
+      const updatedRecords: StudentAcademicRecord[] = await Promise.all(
+        rawLinkedStudents.map(async (st) => {
+          const studentId = st.id;
 
-    return {
-      id: st.id,
-      firstName: st.firstName,
-      lastName: st.lastName,
-      className: st.className,
-      customId: st.customId,
-      avatarUrl: st.avatarUrl,
-      academicAverage: avgScore,
-      previousAverage: avgScore > 0 ? avgScore - 4 : 0,
-      subjects: formattedSubjects,
-    };
-  });
+          const { data: scoresData, error } = await supabase
+            .from('scores')
+            .select(`
+              total_score,
+              assessments (
+                title,
+                subject
+              )
+            `)
+            .eq('student_id', studentId);
+
+          const subjectsMap: { [key: string]: { total: number; count: number; title?: string } } = {};
+
+          if (!error && scoresData && scoresData.length > 0) {
+            scoresData.forEach((row: any) => {
+              const subjectName = row.assessments?.subject || 'General Subject';
+              const assessmentTitle = row.assessments?.title || 'Assessment';
+              const scoreVal = Number(row.total_score) || 0;
+              const normalizedScore = scoreVal > 100 ? 100 : scoreVal;
+
+              if (!subjectsMap[subjectName]) {
+                subjectsMap[subjectName] = { total: 0, count: 0, title: assessmentTitle };
+              }
+              subjectsMap[subjectName].total += normalizedScore;
+              subjectsMap[subjectName].count += 1;
+            });
+          }
+
+          const formattedSubjects: SubjectPerformance[] = Object.keys(subjectsMap).map((subName) => {
+            const avgSubScore = Math.round(subjectsMap[subName].total / subjectsMap[subName].count);
+            let remark: SubjectPerformance['gradeRemark'] = 'Needs Improvement';
+            if (avgSubScore >= 85) remark = 'Distinction';
+            else if (avgSubScore >= 75) remark = 'Above Average';
+            else if (avgSubScore >= 60) remark = 'Satisfactory';
+            else if (avgSubScore >= 50) remark = 'Pass';
+
+            return {
+              name: subName,
+              score: avgSubScore,
+              assessmentTitle: subjectsMap[subName].title,
+              gradeRemark: remark,
+            };
+          });
+
+          let computedAverage = st.academicAverage || 0;
+          if (formattedSubjects.length > 0) {
+            const sumScores = formattedSubjects.reduce((acc, curr) => acc + curr.score, 0);
+            computedAverage = Math.round(sumScores / formattedSubjects.length);
+          }
+
+          return {
+            id: studentId,
+            firstName: st.firstName,
+            lastName: st.lastName,
+            className: st.className,
+            customId: st.customId,
+            avatarUrl: st.avatarUrl,
+            academicAverage: computedAverage,
+            previousAverage: computedAverage > 0 ? computedAverage - 3 : 0,
+            subjects: formattedSubjects,
+          };
+        })
+      );
+
+      setStudentAcademicData(updatedRecords);
+    } catch (err) {
+      console.error('Error fetching student academics:', err);
+    } finally {
+      setLoadingAcademics(false);
+    }
+  }, [rawLinkedStudents]);
+
+  useEffect(() => {
+    void fetchStudentAcademics();
+  }, [fetchStudentAcademics]);
 
   const currentAcademicStudent: StudentAcademicRecord | null = selectedStudent
-    ? linkedStudents.find(s => s.id === selectedStudent.id) || linkedStudents[0] || null
-    : null;
+    ? studentAcademicData.find(s => s.id === selectedStudent.id) || studentAcademicData[0] || null
+    : studentAcademicData[0] || null;
 
-useEffect(() => {
-  if (currentAcademicStudent) {
-    setTempSelectedStudent(currentAcademicStudent);
-  }
-}, [currentAcademicStudent?.id]);
+  useEffect(() => {
+    if (currentAcademicStudent) {
+      setTempSelectedStudent(currentAcademicStudent);
+    }
+  }, [currentAcademicStudent?.id]);
 
-  if (loadingStudents) {
+  if (loadingStudents || loadingAcademics) {
     return (
       <ParentLayout activeTab="Academics">
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.background }}>
@@ -95,10 +162,9 @@ useEffect(() => {
     <ParentLayout activeTab="Academics">
       <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 20, maxWidth: 600, width: '100%', alignSelf: 'center' }}>
         
-        {/* HEADER TITLE */}
         <Text style={{ fontSize: 28, fontWeight: '900', color: theme.text, marginBottom: 16 }}>Academic Performance</Text>
 
-        {linkedStudents.length === 0 ? (
+        {studentAcademicData.length === 0 ? (
           <View style={{ backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border, borderRadius: 20, padding: 40, alignItems: 'center', marginTop: 20 }}>
             <Text style={{ color: theme.icon, textAlign: 'center', fontSize: 14 }}>
               No student wards are currently linked to your account.
@@ -107,7 +173,6 @@ useEffect(() => {
         ) : (
           currentAcademicStudent && (
             <View>
-              {/* CHILD SELECTOR TOP CARD */}
               <TouchableOpacity
                 onPress={() => {
                   setTempSelectedStudent(currentAcademicStudent);
@@ -152,11 +217,9 @@ useEffect(() => {
                 <Ionicons name="chevron-down" size={18} color={theme.icon} />
               </TouchableOpacity>
 
-              {/* OVERALL PERFORMANCE CARD */}
               <View style={{ backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border, borderRadius: 24, padding: 20, marginBottom: 24 }}>
                 <Text style={{ fontSize: 16, fontWeight: '800', color: theme.text, marginBottom: 12 }}>Overall Performance</Text>
                 
-                {/* PERCENTAGE AND DYNAMIC REMARK ROW */}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <Text style={{ fontSize: 32, fontWeight: '900', color: theme.text }}>{currentAcademicStudent.academicAverage}%</Text>
                   <View style={{ backgroundColor: remarkInfo.bg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 }}>
@@ -164,20 +227,17 @@ useEffect(() => {
                   </View>
                 </View>
 
-                {/* PREVIOUS AVERAGE METRIC ON ITS OWN CLEAN LINE */}
                 <View style={{ marginBottom: 16 }}>
                   <Text style={{ fontSize: 12, color: theme.icon }}>
                     Previous Term: <Text style={{ fontWeight: '700', color: theme.text }}>{currentAcademicStudent.previousAverage}%</Text> ({averageDiff >= 0 ? `+${averageDiff}%` : `${averageDiff}%`})
                   </Text>
                 </View>
 
-                {/* PROGRESS BAR */}
                 <View style={{ height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: 'hidden' }}>
                   <View style={{ height: '100%', width: `${currentAcademicStudent.academicAverage}%`, backgroundColor: theme.tint, borderRadius: 4 }} />
                 </View>
               </View>
 
-              {/* SUBJECT PERFORMANCE SECTION */}
               <Text style={{ fontSize: 18, fontWeight: '800', color: theme.text, marginBottom: 12 }}>Subject Performance</Text>
 
               <View style={{ backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border, borderRadius: 24, padding: 16, marginBottom: 20 }}>
@@ -189,7 +249,7 @@ useEffect(() => {
                   currentAcademicStudent.subjects.map((sub, idx) => (
                     <TouchableOpacity
                       key={idx}
-                      onPress={() => router.push(`/academics/detail?subject=${sub.name}` as any)}
+                      onPress={() => router.push(`/academics/detail?subject=${encodeURIComponent(sub.name)}&score=${sub.score}&studentId=${currentAcademicStudent.id}` as any)}
                       style={{
                         paddingVertical: 14,
                         borderBottomWidth: idx < currentAcademicStudent.subjects.length - 1 ? 1 : 0,
@@ -206,7 +266,6 @@ useEffect(() => {
                         </View>
                       </View>
 
-                      {/* SUBJECT BAR */}
                       <View style={{ height: 6, backgroundColor: theme.border, borderRadius: 3, overflow: 'hidden' }}>
                         <View style={{ height: '100%', width: `${sub.score}%`, backgroundColor: sub.score >= 80 ? '#2563eb' : '#16a34a', borderRadius: 3 }} />
                       </View>
@@ -225,7 +284,6 @@ useEffect(() => {
           )
         )}
 
-        {/* SELECT CHILD MODAL */}
         <Modal
           visible={isChildSelectorOpen}
           animationType="slide"
@@ -242,7 +300,7 @@ useEffect(() => {
 
               <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 20 }}>
                 <View style={{ gap: 12 }}>
-                  {linkedStudents.map((child) => {
+                  {studentAcademicData.map((child) => {
                     const isSelected = tempSelectedStudent?.id === child.id;
                     return (
                       <TouchableOpacity
@@ -323,3 +381,4 @@ useEffect(() => {
 };
 
 export default AcademicsScreen;
+

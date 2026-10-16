@@ -20,6 +20,7 @@ export default function MoreScreen() {
     fullName: string;
     email: string;
     role: string;
+    avatarUrl: string | null;
   } | null>(null);
 
   const { themePreference, setThemePreference } = useAppTheme();
@@ -65,6 +66,7 @@ export default function MoreScreen() {
         fullName: dbName || fallbackName,
         email: user.email || 'N/A',
         role: profileData?.role || user.user_metadata?.role || 'Parent / Guardian',
+        avatarUrl: profileData?.avatar_url || null,
       });
     } catch (error) {
       console.error('Error fetching user data:', error);
@@ -108,7 +110,13 @@ export default function MoreScreen() {
         {/* Profile Card (Linked to Profile Settings) */}
         <TouchableOpacity style={styles.profileCard} onPress={() => router.push('/profile-settings' as any)}>
           <View style={styles.avatarContainer}>
-            <View style={styles.avatarPlaceholder} />
+            {userProfile?.avatarUrl ? (
+              <Image source={{ uri: userProfile.avatarUrl }} style={{ width: '100%', height: '100%' }} />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Ionicons name="person" size={24} color="#ffffff" />
+              </View>
+            )}
           </View>
           <View style={styles.profileInfo}>
             <Text style={styles.profileName}>{userProfile?.fullName || 'N/A'}</Text>
@@ -210,7 +218,6 @@ export default function MoreScreen() {
           <Text style={[styles.sectionHeader, { color: theme.tint }]}>Account & Preferences</Text>
           <View style={[styles.cardGroup, { backgroundColor: theme.card, borderColor: theme.border }]}>
             
-            {/* Profile Settings Link */}
             <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/profile-settings' as any)}>
               <Ionicons name="person-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <Text style={[styles.standardMenuText, { color: theme.text }]}>Profile Settings</Text>
@@ -219,7 +226,6 @@ export default function MoreScreen() {
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            {/* Notification Preferences Link */}
             <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/notifications' as any)}>
               <Ionicons name="notifications-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <Text style={[styles.standardMenuText, { color: theme.text }]}>Notification Preferences</Text>
@@ -228,7 +234,6 @@ export default function MoreScreen() {
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            {/* Appearance Trigger */}
             <TouchableOpacity style={styles.menuRow} onPress={() => setIsThemeModalVisible(true)}>
               <Ionicons name="contrast-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <View style={styles.menuRowText}>
@@ -242,7 +247,6 @@ export default function MoreScreen() {
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            {/* Security Link */}
             <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/security' as any)}>
               <Ionicons name="lock-closed-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <Text style={[styles.standardMenuText, { color: theme.text }]}>Security</Text>
@@ -251,7 +255,6 @@ export default function MoreScreen() {
 
             <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
-            {/* Help & Support Link */}
             <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/support' as any)}>
               <Ionicons name="help-circle-outline" size={20} color={theme.textSecondary} style={styles.leftIcon} />
               <Text style={[styles.standardMenuText, { color: theme.text }]}>Help & Support</Text>
@@ -365,10 +368,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#cbd5e1',
     overflow: 'hidden',
     marginRight: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarPlaceholder: {
     flex: 1,
     backgroundColor: '#94a3b8',
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   profileInfo: {
     flex: 1,

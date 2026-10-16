@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { AdminLayout } from '../components/AdminLayout';
 import { supabase } from '../services/supabase';
 
+const BUCKET_NAME = 'student_profile';
+
 interface StudentData {
   id: string;
   customId: string;
@@ -46,7 +48,7 @@ export const Students: React.FC = () => {
   const [newStudentsCount, setNewStudentsCount] = useState(0);
 
   // Popup Modal States
-  const [activeModal, setActiveModal] = useState<'add' | 'status' | 'deactivate' | 'assign' | 'link' | null>(null);
+  const [activeModal, setActiveModal] = useState<'add' | 'edit' | 'status' | 'deactivate' | 'assign' | 'link' | null>(null);
   const [selectedStudent, setSelectedStudent] = useState<StudentData | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
@@ -55,7 +57,7 @@ export const Students: React.FC = () => {
   const [targetStatus, setTargetStatus] = useState<StudentData['status']>('Active Enrolled');
   const [targetGuardianId, setTargetGuardianId] = useState('');
 
-  // Form Field States for Adding a Student
+  // Form Field States for Adding/Editing a Student
   const [newFirstName, setNewFirstName] = useState('');
   const [newLastName, setNewLastName] = useState('');
   const [generatedStudentId, setGeneratedStudentId] = useState('');
@@ -63,6 +65,8 @@ export const Students: React.FC = () => {
   const [newGender, setNewGender] = useState('Male');
   const [newClassId, setNewClassId] = useState('');
   const [newGuardianId, setNewGuardianId] = useState('');
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const cardStyle: React.CSSProperties = {
@@ -101,7 +105,7 @@ export const Students: React.FC = () => {
         const { data: dbProfiles } = await supabase
           .from('profiles')
           .select('id, full_name, first_name, last_name, role, created_at')
-          .ilike('role', 'parent') // Ensures only parents show up in the dropdown
+          .ilike('role', 'parent')
           .order('created_at', { ascending: false });
 
         if (dbProfiles) {
@@ -177,7 +181,58 @@ export const Students: React.FC = () => {
   const handleOpenAddModal = () => {
     const randomId = `STU-${Math.floor(1000 + Math.random() * 9000)}`;
     setGeneratedStudentId(randomId);
+    setNewFirstName('');
+    setNewLastName('');
+    setNewDob('');
+    setNewGender('Male');
+    setNewClassId('');
+    setNewGuardianId('');
+    setAvatarFile(null);
+    setAvatarPreview(null);
     setActiveModal('add');
+  };
+
+  const handleOpenEditModal = (student: StudentData) => {
+    setSelectedStudent(student);
+    const nameParts = student.name.split(' ');
+    setNewFirstName(nameParts[0] || '');
+    setNewLastName(nameParts.slice(1).join(' ') || '');
+    setGeneratedStudentId(student.customId);
+    setNewClassId(student.classId || '');
+    setNewGuardianId(student.parentId || '');
+    setAvatarFile(null);
+    setAvatarPreview(student.avatar || null);
+    setOpenMenuId(null);
+    setActiveModal('edit');
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setAvatarFile(file);
+      setAvatarPreview(URL.createObjectURL(file));
+    }
+  };
+
+const uploadAvatarToSupabase = async (studentId: string, file: File): Promise<string | null> => {
+    try {
+      const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = `${studentId}-${Date.now()}.${fileExt}`;
+      // Store directly in the bucket root instead of nested /students/ folder
+      const filePath = fileName;
+
+      const { error: uploadError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(filePath, file, { upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from(BUCKET_NAME).getPublicUrl(filePath);
+      return data.publicUrl;
+    } catch (err) {
+      console.error('Error uploading student avatar:', err);
+      return null;
+    }
   };
 
   const handleCreateStudent = async () => {
@@ -191,7 +246,7 @@ export const Students: React.FC = () => {
       const selectedClassObj = classesList.find(c => c.id === newClassId);
       const resolvedClassName = selectedClassObj ? selectedClassObj.name : 'Unassigned';
 
-      const { error } = await supabase.from('students').insert([
+      const { data: insertedData, error } = await supabase.from('students').insert([
         {
           first_name: newFirstName.trim(),
           last_name: newLastName.trim(),
@@ -203,16 +258,19 @@ export const Students: React.FC = () => {
           parent_id: newGuardianId || null,
           status: 'Active Enrolled',
         }
-      ]);
+      ]).select().single();
 
       if (error) throw error;
 
+      if (avatarFile && insertedData) {
+        const uploadedAvatarUrl = await uploadAvatarToSupabase(insertedData.id, avatarFile);
+        if (uploadedAvatarUrl) {
+          await supabase.from('students').update({ avatar: uploadedAvatarUrl }).eq('id', insertedData.id);
+        }
+      }
+
       alert('Student added successfully!');
       setActiveModal(null);
-      setNewFirstName('');
-      setNewLastName('');
-      setNewClassId('');
-      setNewGuardianId('');
       window.location.reload();
     } catch (err: unknown) {
       const errorMessage = typeof err === 'object' && err !== null && 'message' in err 
@@ -220,6 +278,50 @@ export const Students: React.FC = () => {
         : String(err);
       console.error('Error creating student:', err);
       alert('Failed to create student: ' + errorMessage);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateStudent = async () => {
+    if (!selectedStudent || !newFirstName || !newLastName || !newClassId) {
+      alert('Please fill in required fields.');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      const selectedClassObj = classesList.find(c => c.id === newClassId);
+      const resolvedClassName = selectedClassObj ? selectedClassObj.name : 'Unassigned';
+
+      let updatedAvatarUrl = selectedStudent.avatar || null;
+      if (avatarFile) {
+        const newUrl = await uploadAvatarToSupabase(selectedStudent.id, avatarFile);
+        if (newUrl) updatedAvatarUrl = newUrl;
+      }
+
+      const updatePayload: Record<string, unknown> = {
+        first_name: newFirstName.trim(),
+        last_name: newLastName.trim(),
+        class_id: newClassId,
+        class_name: resolvedClassName,
+        parent_id: newGuardianId || null,
+      };
+
+      if (updatedAvatarUrl !== undefined) {
+        updatePayload.avatar = updatedAvatarUrl;
+      }
+
+      const { error } = await supabase.from('students').update(updatePayload).eq('id', selectedStudent.id);
+
+      if (error) throw error;
+
+      alert('Student updated successfully!');
+      setActiveModal(null);
+      window.location.reload();
+    } catch (err) {
+      console.error('Error updating student:', err);
+      alert('Failed to update student: ' + String(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -397,8 +499,12 @@ export const Students: React.FC = () => {
                     <tr key={student.id} style={{ borderBottom: '1px solid #f1f5f9', position: 'relative' }}>
                       <td style={{ padding: '16px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <div style={{ width: '38px', height: '38px', borderRadius: '50%', backgroundColor: '#dbeafe', color: '#1e40af', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px' }}>
-                            {student.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                          <div style={{ width: '38px', height: '38px', borderRadius: '50%', backgroundColor: '#dbeafe', color: '#1e40af', fontWeight: '900', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', overflow: 'hidden' }}>
+                            {student.avatar ? (
+                              <img src={student.avatar} alt={student.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            ) : (
+                              student.name.split(' ').map(n => n[0]).join('').slice(0, 2)
+                            )}
                           </div>
                           <div>
                             <div style={{ fontWeight: 'bold', color: '#0f172a' }}>{student.name}</div>
@@ -438,7 +544,10 @@ export const Students: React.FC = () => {
                             border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1)',
                             zIndex: 100, minWidth: '180px', textAlign: 'left', overflow: 'hidden'
                           }}>
-                            <button onClick={() => handleOpenActionModal('assign', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
+                            <button onClick={() => handleOpenEditModal(student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
+                              Edit Student & Image
+                            </button>
+                            <button onClick={() => handleOpenActionModal('assign', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
                               Assign Class
                             </button>
                             <button onClick={() => handleOpenActionModal('link', student)} style={{ width: '100%', padding: '10px 14px', textAlign: 'left', border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', borderTop: '1px solid #f1f5f9' }}>
@@ -476,6 +585,21 @@ export const Students: React.FC = () => {
               </div>
 
               <div style={{ padding: '24px', maxHeight: '70vh', overflowY: 'auto' }}>
+                {/* AVATAR UPLOAD SECTION */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
+                  <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: '#e2e8f0', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #cbd5e1' }}>
+                    {avatarPreview ? (
+                      <img src={avatarPreview} alt="Avatar preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 'bold' }}>PHOTO</span>
+                    )}
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '6px' }}>Student Profile Picture</label>
+                    <input type="file" accept="image/*" onChange={handleFileChange} style={{ fontSize: '12px', color: '#64748b' }} />
+                  </div>
+                </div>
+
                 <div style={{ fontSize: '11px', fontWeight: '800', color: '#002b49', textTransform: 'uppercase', marginBottom: '14px' }}>
                   PERSONAL INFORMATION
                 </div>
@@ -574,6 +698,95 @@ export const Students: React.FC = () => {
                 <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
                 <button onClick={handleCreateStudent} disabled={isSubmitting} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>
                   {isSubmitting ? 'Saving...' : 'Save Student'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: EDIT STUDENT & IMAGE */}
+        {/* ========================================================================= */}
+        {activeModal === 'edit' && selectedStudent && (
+          <div style={modalOverlayStyle}>
+            <div style={{ ...modalContainerStyle, maxWidth: '680px' }}>
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Edit Student: {selectedStudent.name}</h3>
+                  <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>Update student profile information and photo.</p>
+                </div>
+                <button onClick={() => setActiveModal(null)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
+              </div>
+
+              <div style={{ padding: '24px', maxHeight: '70vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
+                  <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: '#e2e8f0', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #cbd5e1' }}>
+                    {avatarPreview ? (
+                      <img src={avatarPreview} alt="Avatar preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 'bold' }}>PHOTO</span>
+                    )}
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '6px' }}>Change Profile Picture</label>
+                    <input type="file" accept="image/*" onChange={handleFileChange} style={{ fontSize: '12px', color: '#64748b' }} />
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>First Name *</label>
+                    <input 
+                      type="text" 
+                      value={newFirstName} 
+                      onChange={(e) => setNewFirstName(e.target.value)} 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Last Name *</label>
+                    <input 
+                      type="text" 
+                      value={newLastName} 
+                      onChange={(e) => setNewLastName(e.target.value)} 
+                      style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px', boxSizing: 'border-box' }} 
+                    />
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Assign Class *</label>
+                  <select 
+                    value={newClassId} 
+                    onChange={(e) => setNewClassId(e.target.value)} 
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
+                  >
+                    <option value="">Select a class...</option>
+                    {classesList.map(cls => (
+                      <option key={cls.id} value={cls.id}>{cls.name} ({cls.grade})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155' }}>Parent / Guardian Name</label>
+                  <select 
+                    value={newGuardianId} 
+                    onChange={(e) => setNewGuardianId(e.target.value)} 
+                    style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '12px', marginTop: '4px' }}
+                  >
+                    <option value="">Select parent or guardian...</option>
+                    {guardiansList.map(g => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button onClick={() => setActiveModal(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={handleUpdateStudent} disabled={isSubmitting} style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer' }}>
+                  {isSubmitting ? 'Updating...' : 'Update Student'}
                 </button>
               </div>
             </div>

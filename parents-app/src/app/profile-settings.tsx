@@ -54,7 +54,7 @@ export default function ProfileSettingsScreen() {
         const resolvedName = combined || profileData.full_name || profileData.name || user.user_metadata?.full_name || user.user_metadata?.name || '';
         
         setFullName(resolvedName);
-        setPhone(profileData.phone || profileData.phone_number || '');
+        setPhone(profileData.primary_phone || profileData.phone || profileData.phone_number || '');
         setRelationship(profileData.relationship || 'Mother');
         setAccountId(profileData.account_id || `Parent-${user.id.slice(0, 8)}`);
         setAccountType(profileData.role || profileData.account_type || 'Parent / Guardian');
@@ -72,7 +72,7 @@ export default function ProfileSettingsScreen() {
     }
   };
 
-const handlePickAndUploadImage = async () => {
+  const handlePickAndUploadImage = async () => {
     try {
       const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permissionResult.granted) {
@@ -99,7 +99,6 @@ const handlePickAndUploadImage = async () => {
       const fileName = `${Date.now()}.${fileExt}`;
       const filePath = `${user.id}/${fileName}`; 
 
-      // Fetch the file as a blob/arrayBuffer natively compatible with Supabase storage
       const response = await fetch(asset.uri);
       const arrayBuffer = await response.arrayBuffer();
 
@@ -116,8 +115,12 @@ const handlePickAndUploadImage = async () => {
       const publicUrl = data.publicUrl;
 
       setAvatarUrl(publicUrl);
+      
+      // Included required NOT NULL fields (email & role) to prevent database constraint errors
       await supabase.from('profiles').upsert({
         id: user.id,
+        email: user.email || email,
+        role: accountType.toLowerCase(),
         avatar_url: publicUrl,
         updated_at: new Date().toISOString(),
       });
@@ -143,10 +146,12 @@ const handlePickAndUploadImage = async () => {
 
       const updates = {
         id: user.id,
+        email: user.email || email, // Satisfies NOT NULL constraint
+        role: accountType.toLowerCase(), // Satisfies role check constraint
         first_name: firstName,
         last_name: lastName,
         full_name: fullName,
-        phone: phone,
+        primary_phone: phone,
         relationship: relationship,
         preferred_contact: preferredContact,
         updated_at: new Date().toISOString(),

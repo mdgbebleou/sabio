@@ -102,6 +102,7 @@ const ParentDashboard: React.FC = () => {
             studentsData.map(async (st: Record<string, unknown>) => {
               const studentId = st.id as string;
 
+              // 1. Fetch Academic Scores
               const { data: scoresData } = await supabase
                 .from('scores')
                 .select(`
@@ -138,6 +139,24 @@ const ParentDashboard: React.FC = () => {
                 computedAverage = Math.round(sumScores / formattedSubjects.length);
               }
 
+              // 2. Fetch Live Fee Totals from the `fees` Table Schema
+              const { data: feesData } = await supabase
+                .from('fees')
+                .select('total_fees, amount_paid, balance')
+                .eq('student_id', studentId);
+
+              let studentTotalFees = 0;
+              let studentPaidFees = 0;
+              let studentOutstanding = 0;
+
+              if (feesData && feesData.length > 0) {
+                feesData.forEach((feeItem: any) => {
+                  studentTotalFees += Number(feeItem.total_fees || 0);
+                  studentPaidFees += Number(feeItem.amount_paid || 0);
+                  studentOutstanding += Number(feeItem.balance || 0);
+                });
+              }
+
               return {
                 id: studentId,
                 firstName: (st.first_name as string) || '',
@@ -147,9 +166,9 @@ const ParentDashboard: React.FC = () => {
                 avatarUrl: (st.avatar as string) || undefined,
                 attendancePercentage: (st.attendance_score as number) || 100,
                 academicAverage: computedAverage,
-                outstandingBalance: (st.outstanding_balance as number) || 0,
-                totalFees: (st.total_fees as number) || 0,
-                paidFees: (st.paid_fees as number) || 0,
+                outstandingBalance: studentOutstanding,
+                totalFees: studentTotalFees,
+                paidFees: studentPaidFees,
                 unreadMessagesCount: (st.unread_messages_count as number) || 0,
                 subjects: formattedSubjects,
               };

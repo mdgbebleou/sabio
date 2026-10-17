@@ -18,7 +18,7 @@ interface StudentData {
   academicTrend: 'up' | 'down' | 'flat';
   attendanceScore: string;
   attendanceWarning?: boolean;
-  feeStatus: 'Paid' | 'Overdue' | 'Partial';
+  feeStatus: 'Paid' | 'Overdue' | 'Partial' | 'No Record';
   feeAmountOverdue?: string;
   engagement: 'High' | 'Moderate' | 'Low';
   status: 'Active Enrolled' | 'Suspended' | 'Pending' | 'Deactivated';
@@ -89,7 +89,7 @@ export const Students: React.FC = () => {
     boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', overflow: 'hidden', fontFamily: "'Inter', sans-serif"
   };
 
-  // Fetch Students, Classes, and Guardians from Supabase with Newest-First Ordering
+  // Fetch Students, Classes, Guardians, and Dynamic Metric Records from Supabase
   useEffect(() => {
     let isMounted = true;
 
@@ -97,10 +97,12 @@ export const Students: React.FC = () => {
       try {
         setIsLoading(true);
 
+        // 1. Fetch Classes
         const { data: dbClasses, error: classErr } = await supabase.from('classes').select('id, name, grade');
         if (classErr) throw classErr;
         if (isMounted) setClassesList(dbClasses || []);
 
+        // 2. Fetch Parent Profiles
         let formattedGuardians: GuardianOption[] = [];
         const { data: dbProfiles } = await supabase
           .from('profiles')
@@ -114,9 +116,9 @@ export const Students: React.FC = () => {
             name: (p.full_name as string) || `${p.first_name || ''} ${p.last_name || ''}`.trim() || 'Parent Profile'
           }));
         }
-
         if (isMounted) setGuardiansList(formattedGuardians);
 
+        // 3. Fetch Students with Class and Parent relations
         const { data: dbStudents, error: studentErr } = await supabase
           .from('students')
           .select(`
@@ -128,7 +130,57 @@ export const Students: React.FC = () => {
 
         if (studentErr) throw studentErr;
 
+        // 4. Fetch Fee records to calculate live fee status per student
+        const { data: dbFees } = await supabase.from('fees').select('student_id, status, balance, total_fees');
+        const feesMap = new Map<string, { status: string; balance: number }>();
+        if (dbFees) {
+          dbFees.forEach((fee: Record<string, unknown>) => {
+            const studentId = fee.student_id as string;
+            if (studentId) {
+              feesMap.set(studentId, {
+                status: (fee.status as string) || 'Paid',
+                balance: Number(fee.balance || 0),
+              });
+            }
+          });
+        }
+
+        // 5. Fetch Attendance records to compute live attendance percentages
+        const { data: dbAttendance } = await supabase.from('attendance').select('student_id, status');
+        const attendanceStatsMap = new Map<string, { total: number; present: number }>();
+        if (dbAttendance) {
+          dbAttendance.forEach((att: Record<string, unknown>) => {
+            const studentId = att.student_id as string;
+            if (studentId) {
+              const current = attendanceStatsMap.get(studentId) || { total: 0, present: 0 };
+              current.total += 1;
+              const statusVal = String(att.status || '').toLowerCase();
+              if (statusVal === 'present' || statusVal === 'true' || statusVal === '1') {
+                current.present += 1;
+              }
+              attendanceStatsMap.set(studentId, current);
+            }
+          });
+        }
+
+        // 6. Fetch Grades / Academic scores
+        const { data: dbGrades } = await supabase.from('grades').select('student_id, score, total_score');
+        const gradesMap = new Map<string, { earned: number; possible: number }>();
+        if (dbGrades) {
+          dbGrades.forEach((g: Record<string, unknown>) => {
+            const studentId = g.student_id as string;
+            if (studentId) {
+              const current = gradesMap.get(studentId) || { earned: 0, possible: 0 };
+              current.earned += Number(g.score || 0);
+              current.possible += Number(g.total_score || 100);
+              gradesMap.set(studentId, current);
+            }
+          });
+        }
+
+        // 7. Format Student Data using live metrics
         const formattedStudents: StudentData[] = (dbStudents || []).map((st: Record<string, unknown>) => {
+          const studentId = st.id as string;
           const cls = st.classes as Record<string, unknown> | null;
           const className = cls ? (cls.name as string) : ((st.class_name as string) || 'Unassigned');
           const classId = cls ? (cls.id as string) : ((st.class_id as string) || undefined);
@@ -139,9 +191,42 @@ export const Students: React.FC = () => {
             : ((st.guardian_name as string) || 'Not Assigned');
           const parentId = profileObj ? (profileObj.id as string) : ((st.parent_id as string) || undefined);
 
+          // Calculate Academic Score dynamically
+          const gradeRecord = gradesMap.get(studentId);
+          let academicScoreStr = 'N/A';
+          if (gradeRecord && gradeRecord.possible > 0) {
+            const percentage = Math.round((gradeRecord.earned / gradeRecord.possible) * 100);
+            academicScoreStr = `${percentage}%`;
+          } else if (st.academic_score) {
+            academicScoreStr = `${st.academic_score}%`;
+          }
+
+          // Calculate Attendance Score dynamically
+          const attRecord = attendanceStatsMap.get(studentId);
+          let attendanceScoreStr = 'N/A';
+          if (attRecord && attRecord.total > 0) {
+            const attPct = Math.round((attRecord.present / attRecord.total) * 100);
+            attendanceScoreStr = `${attPct}%`;
+          } else if (st.attendance_score) {
+            attendanceScoreStr = `${st.attendance_score}%`;
+          }
+
+          // Fetch Fee Status dynamically
+          const feeRecord = feesMap.get(studentId);
+          let resolvedFeeStatus: StudentData['feeStatus'] = 'No Record';
+          if (feeRecord) {
+            if (feeRecord.balance === 0 || feeRecord.status === 'Paid') {
+              resolvedFeeStatus = 'Paid';
+            } else if (feeRecord.status === 'Overdue' || feeRecord.balance > 0) {
+              resolvedFeeStatus = 'Overdue';
+            } else {
+              resolvedFeeStatus = 'Partial';
+            }
+          }
+
           return {
-            id: st.id as string,
-            customId: (st.custom_id as string) || (st.id as string).slice(0, 8),
+            id: studentId,
+            customId: (st.custom_id as string) || studentId.slice(0, 8),
             name: `${st.first_name || ''} ${st.last_name || ''}`.trim(),
             avatar: (st.avatar as string) || undefined,
             attentionFlag: null,
@@ -149,10 +234,10 @@ export const Students: React.FC = () => {
             classId: classId,
             parentName: parentName || 'Not Assigned',
             parentId: parentId,
-            academicScore: '78%',
+            academicScore: academicScoreStr,
             academicTrend: 'up',
-            attendanceScore: '92%',
-            feeStatus: 'Paid',
+            attendanceScore: attendanceScoreStr,
+            feeStatus: resolvedFeeStatus,
             engagement: 'High',
             status: (st.status as StudentData['status']) || 'Active Enrolled',
           };
@@ -214,11 +299,10 @@ export const Students: React.FC = () => {
     }
   };
 
-const uploadAvatarToSupabase = async (studentId: string, file: File): Promise<string | null> => {
+  const uploadAvatarToSupabase = async (studentId: string, file: File): Promise<string | null> => {
     try {
       const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
       const fileName = `${studentId}-${Date.now()}.${fileExt}`;
-      // Store directly in the bucket root instead of nested /students/ folder
       const filePath = fileName;
 
       const { error: uploadError } = await supabase.storage
@@ -515,11 +599,15 @@ const uploadAvatarToSupabase = async (studentId: string, file: File): Promise<st
 
                       <td style={{ padding: '16px', color: '#334155', fontWeight: '500' }}>{student.className}</td>
                       <td style={{ padding: '16px', color: '#334155', fontWeight: '500' }}>{student.parentName}</td>
-                      <td style={{ padding: '16px', fontWeight: 'bold' }}>{student.academicScore}</td>
-                      <td style={{ padding: '16px', fontWeight: 'bold' }}>{student.attendanceScore}</td>
+                      <td style={{ padding: '16px', fontWeight: 'bold', color: student.academicScore === 'N/A' ? '#94a3b8' : '#0f172a' }}>{student.academicScore}</td>
+                      <td style={{ padding: '16px', fontWeight: 'bold', color: student.attendanceScore === 'N/A' ? '#94a3b8' : '#0f172a' }}>{student.attendanceScore}</td>
                       
                       <td style={{ padding: '16px' }}>
-                        <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' }}>
+                        <span style={{ 
+                          backgroundColor: student.feeStatus === 'Paid' ? '#dcfce7' : student.feeStatus === 'Overdue' ? '#fee2e2' : '#fef3c7', 
+                          color: student.feeStatus === 'Paid' ? '#166534' : student.feeStatus === 'Overdue' ? '#991b1b' : '#b45309', 
+                          padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold' 
+                        }}>
                           {student.feeStatus}
                         </span>
                       </td>

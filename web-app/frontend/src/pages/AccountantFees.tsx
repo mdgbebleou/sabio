@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { AccountantLayout } from '../components/AccountantLayout';
+import { supabase } from '../services/supabase';
 import {
   ResponsiveContainer,
   BarChart,
@@ -27,6 +28,17 @@ import type {
   ClassOutstanding,
   PaymentRow,
 } from '../services/teacherService';
+
+interface FeeStructureRecord {
+  id: string;
+  academic_year: string;
+  term: string;
+  category: string;
+  amount: number;
+  notes?: string;
+  status: string;
+  created_at: string;
+}
 
 const fmtMoney = (n: number): string => {
   return `GHS ${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
@@ -71,8 +83,12 @@ export const AccountantFees: React.FC = () => {
   const [stats, setStats] = useState<FeeStats | null>(null);
   const [trend, setTrend] = useState<FeeTrendPoint[]>([]);
   const [classOut, setClassOut] = useState<ClassOutstanding[]>([]);
+  const [feeStructures, setFeeStructures] = useState<FeeStructureRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Tab view: 'records' | 'structures'
+  const [activeTab, setActiveTab] = useState<'records' | 'structures'>('records');
 
   // filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -100,6 +116,15 @@ export const AccountantFees: React.FC = () => {
   const [detailsPayments, setDetailsPayments] = useState<PaymentRow[]>([]);
   const [detailsLoading, setDetailsLoading] = useState(false);
 
+  // Create Master Structure Modal
+  const [structureModalOpen, setStructureModalOpen] = useState(false);
+  const [newCategory, setNewCategory] = useState('');
+  const [newAmount, setNewAmount] = useState('');
+  const [newTerm, setNewTerm] = useState('Term 1');
+  const [newYear, setNewYear] = useState('2026/2027');
+  const [newNotes, setNewNotes] = useState('');
+  const [savingStructure, setSavingStructure] = useState(false);
+
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',
     border: '1px solid #e2e8f0',
@@ -120,18 +145,23 @@ export const AccountantFees: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [r, s, t, c] = await Promise.all([
+      const [r, s, t, c, structRes] = await Promise.all([
         getAllFeeRecords(),
         getFeeStats(),
         getFeeTrend(),
         getClassOutstanding(),
+        supabase.from('fee_structures').select('*').order('created_at', { ascending: false }),
       ]);
       setRecords(r);
       setStats(s);
       setTrend(t);
       setClassOut(c);
-    } catch (err: any) {
-      setError(err?.message || 'Could not load fee data.');
+      if (structRes.data) {
+        setFeeStructures(structRes.data as FeeStructureRecord[]);
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setError(errorMessage || 'Could not load fee data.');
     } finally {
       setLoading(false);
     }
@@ -208,7 +238,7 @@ export const AccountantFees: React.FC = () => {
     try {
       const list = await getPaymentsForFee(record.id);
       setDetailsPayments(list);
-    } catch (err: any) {
+    } catch {
       setDetailsPayments([]);
     } finally {
       setDetailsLoading(false);
@@ -235,10 +265,77 @@ export const AccountantFees: React.FC = () => {
       });
       setPayModalOpen(false);
       await load();
-    } catch (err: any) {
-      alert(err?.message || 'Could not record payment.');
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      alert(errorMessage || 'Could not record payment.');
     } finally {
       setPaying(false);
+    }
+  };
+
+  const handleCreateStructure = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCategory.trim() || !newAmount) {
+      alert('Please fill in category and amount.');
+      return;
+    }
+    const amt = parseFloat(newAmount);
+    if (isNaN(amt) || amt <= 0) {
+      alert('Enter a valid amount.');
+      return;
+    }
+
+    setSavingStructure(true);
+    try {
+      // 1. Insert master fee structure
+      const { error: insErr } = await supabase.from('fee_structures').insert([
+        {
+          category: newCategory.trim(),
+          amount: amt,
+          term: newTerm,
+          academic_year: newYear,
+          notes: newNotes.trim() || null,
+          status: 'Active',
+        },
+      ]);
+      if (insErr) throw insErr;
+
+      // 2. Automatically populate fee ledgers for all existing students in the `fees` table
+      const { data: studentsList, error: studErr } = await supabase.from('students').select('id');
+      if (studErr) throw studErr;
+
+      if (studentsList && studentsList.length > 0) {
+       const feeRowsToInsert = studentsList.map((student) => ({
+  student_id: student.id,
+  total_fees: amt,
+  amount_paid: 0,
+  balance: amt,
+  status: 'Outstanding',
+  term: newTerm,
+  category: newCategory.trim(), // e.g., 'ICT Levy' keeps it separate from 'Tuition'
+  invoice_number: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
+  invoice_status: 'Generated',
+}));
+
+await supabase.from('fees').insert(feeRowsToInsert);
+
+        const { error: batchErr } = await supabase.from('fees').insert(feeRowsToInsert);
+        if (batchErr) {
+          console.error('Error auto-allocating student fees:', batchErr);
+        }
+      }
+
+      alert('Master fee structure created and assigned to student ledgers successfully!');
+      setStructureModalOpen(false);
+      setNewCategory('');
+      setNewAmount('');
+      setNewNotes('');
+      await load();
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      alert(`Failed to save fee structure: ${errorMessage}`);
+    } finally {
+      setSavingStructure(false);
     }
   };
 
@@ -259,6 +356,38 @@ export const AccountantFees: React.FC = () => {
             {error}
           </div>
         )}
+
+        {/* HEADER & TABS BAR */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '800', color: '#0f172a' }}>Fee Management & Structures</h1>
+            <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>Manage master fee structures and monitor individual student ledgers.</p>
+          </div>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', backgroundColor: '#e2e8f0', padding: '3px', borderRadius: '10px' }}>
+              <button
+                onClick={() => setActiveTab('records')}
+                style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', backgroundColor: activeTab === 'records' ? '#ffffff' : 'transparent', color: activeTab === 'records' ? '#0f172a' : '#64748b', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', boxShadow: activeTab === 'records' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}
+              >
+                Student Ledger Records
+              </button>
+              <button
+                onClick={() => setActiveTab('structures')}
+                style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', backgroundColor: activeTab === 'structures' ? '#ffffff' : 'transparent', color: activeTab === 'structures' ? '#0f172a' : '#64748b', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', boxShadow: activeTab === 'structures' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}
+              >
+                Master Fee Structures ({feeStructures.length})
+              </button>
+            </div>
+            {activeTab === 'structures' && (
+              <button
+                onClick={() => setStructureModalOpen(true)}
+                style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', color: '#ffffff', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                + Add Fee Structure
+              </button>
+            )}
+          </div>
+        </div>
 
         {/* 4 TOP SUMMARY METRIC CARDS */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '24px' }}>
@@ -289,7 +418,7 @@ export const AccountantFees: React.FC = () => {
             <div style={{ width: '100%', height: '6px', backgroundColor: '#f1f5f9', borderRadius: '3px', marginTop: '8px', overflow: 'hidden' }}>
               <div style={{ width: `${collectionPct}%`, height: '100%', backgroundColor: '#10b981' }} />
             </div>
-            <span style={{ fontSize: '11px', color: '#166534', fontWeight: 'bold', display: 'block', marginTop: '4px' }}>{collectionPct}%</span>
+            <span style={{ fontSize: '11px', color: '#166534', fontWeight: 'bold', display: 'block', marginTop: '4px' }}>{collectionPct}% Collection Rate</span>
           </div>
 
           <div style={cardStyle}>
@@ -320,314 +449,457 @@ export const AccountantFees: React.FC = () => {
 
         </div>
 
-        {/* TREND & DONUT CHARTS SECTION */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(320px, 1fr)', gap: '20px', alignItems: 'start', marginBottom: '24px' }}>
-
-          <div style={{ ...cardStyle, height: '100%', minHeight: '380px', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Fee Collection Trend</h3>
-                <span style={{ fontSize: '11px', color: '#64748b' }}>Compare expected fees with actual collections over the selected period.</span>
-              </div>
-              <button style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '11px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
-                Monthly
-              </button>
+        {/* TAB 1: MASTER FEE STRUCTURES VIEW */}
+        {activeTab === 'structures' && (
+          <div style={{ ...cardStyle, padding: 0, overflow: 'hidden', marginBottom: '24px' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Configured Master Fee Structures</h3>
+              <span style={{ fontSize: '12px', color: '#64748b' }}>Showing all database fee categories</span>
             </div>
-
-            <div style={{ width: '100%', height: '230px', flex: 1 }}>
-              {loading ? (
-                <div style={{ fontSize: '12px', color: '#64748b' }}>Loading...</div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={trend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="month" stroke="#64748b" fontSize={11} tickLine={false} />
-                    <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '12px', border: 'none' }}
-                      formatter={(v: any) => fmtMoney(Number(v ?? 0))}
-                    />
-                    <Bar dataKey="expected" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="collected" fill="#0f172a" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', gap: '20px', fontSize: '11px', fontWeight: 'bold', color: '#64748b', marginTop: '12px' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '10px', height: '10px', backgroundColor: '#e2e8f0', borderRadius: '2px' }} /> Expected Fees</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '10px', height: '10px', backgroundColor: '#0f172a', borderRadius: '2px' }} /> Collected Fees</span>
-            </div>
-          </div>
-
-          <div style={{ ...cardStyle, textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: '100%', minHeight: '380px' }}>
-            <div style={{ textAlign: 'left' }}>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Payment Status Breakdown</h3>
-            </div>
-
-            <div style={{ width: '100%', height: '180px', position: 'relative' }}>
-              {loading || donutTotal === 0 ? (
-                <div style={{ paddingTop: '60px', fontSize: '12px', color: '#64748b' }}>No fee records yet.</div>
-              ) : (
-                <>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Tooltip contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '12px', border: 'none' }} />
-                      <Pie data={donutData} cx="50%" cy="50%" innerRadius={55} outerRadius={75} paddingAngle={4} dataKey="value">
-                        {donutData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                    <div style={{ fontSize: '18px', fontWeight: '900', color: '#0f172a' }}>{donutTotal}</div>
-                    <span style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b', textTransform: 'uppercase' }}>Total</span>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '11px', fontWeight: 'bold', color: '#334155', textAlign: 'left' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#10b981', borderRadius: '50%' }} /> Paid ({stats?.byStatus.Paid ?? 0})</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#3b82f6', borderRadius: '50%' }} /> Partial ({stats?.byStatus['Partially Paid'] ?? 0})</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#f59e0b', borderRadius: '50%' }} /> Outstanding ({stats?.byStatus.Outstanding ?? 0})</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%' }} /> Overdue ({stats?.byStatus.Overdue ?? 0})</div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '10px', fontWeight: '800' }}>
+                    <th style={{ padding: '12px 20px' }}>CATEGORY / NAME</th>
+                    <th style={{ padding: '12px 20px' }}>ACADEMIC YEAR & TERM</th>
+                    <th style={{ padding: '12px 20px' }}>AMOUNT</th>
+                    <th style={{ padding: '12px 20px' }}>NOTES / DESCRIPTION</th>
+                    <th style={{ padding: '12px 20px' }}>STATUS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {feeStructures.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '30px', textAlign: 'center', color: '#64748b' }}>
+                        No fee structures defined yet. Click "+ Add Fee Structure" to create one.
+                      </td>
+                    </tr>
+                  ) : (
+                    feeStructures.map((struct) => (
+                      <tr key={struct.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '12px 20px', fontWeight: 'bold', color: '#0f172a' }}>{struct.category}</td>
+                        <td style={{ padding: '12px 20px', color: '#334155' }}>{struct.academic_year} • {struct.term}</td>
+                        <td style={{ padding: '12px 20px', fontWeight: '900', color: '#1e40af' }}>{fmtMoney(Number(struct.amount))}</td>
+                        <td style={{ padding: '12px 20px', color: '#64748b' }}>{struct.notes || '—'}</td>
+                        <td style={{ padding: '12px 20px' }}>
+                          <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '3px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold' }}>
+                            {struct.status || 'Active'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
+        )}
 
-        </div>
+        {/* TAB 2: STUDENT RECORDS & ANALYTICS VIEW */}
+        {activeTab === 'records' && (
+          <>
+            {/* TREND & DONUT CHARTS SECTION */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(320px, 1fr)', gap: '20px', alignItems: 'start', marginBottom: '24px' }}>
 
-        {/* OUTSTANDING FEES BY CLASS */}
-        <div style={{ ...cardStyle, marginBottom: '24px' }}>
-          <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Outstanding Fees by Class</h3>
-          <span style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '20px' }}>See which classes have the highest outstanding balances.</span>
-
-          {loading ? (
-            <div style={{ fontSize: '12px', color: '#64748b' }}>Loading...</div>
-          ) : classOut.length === 0 ? (
-            <div style={{ fontSize: '12px', color: '#64748b' }}>No outstanding balances.</div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
-              {classOut.map((cls) => (
-                <div key={cls.className} style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', color: '#0f172a', marginBottom: '8px' }}>
-                    <span>{cls.className}</span>
-                    <span style={{ color: '#d97706' }}>{fmtMoney(cls.amount)}</span>
-                  </div>
-                  <div style={{ width: '100%', height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
-                    <div style={{ width: `${cls.percentOfMax}%`, height: '100%', backgroundColor: '#f59e0b' }} />
+              <div style={{ ...cardStyle, height: '100%', minHeight: '380px', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Fee Collection Trend</h3>
+                    <span style={{ fontSize: '11px', color: '#64748b' }}>Compare expected fees with actual collections over the selected period.</span>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
 
-        {/* STUDENT FEE RECORDS TABLE */}
-        <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
+                <div style={{ width: '100%', height: '230px', flex: 1 }}>
+                  {loading ? (
+                    <div style={{ fontSize: '12px', color: '#64748b' }}>Loading...</div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={trend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="month" stroke="#64748b" fontSize={11} tickLine={false} />
+                        <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '12px', border: 'none' }}
+                          formatter={(v: unknown) => fmtMoney(Number(v ?? 0))}
+                        />
+                        <Bar dataKey="expected" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="collected" fill="#0f172a" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
 
-          <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Student Fee Records</h3>
-
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '6px 12px', width: '240px' }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input
-                  type="text"
-                  placeholder="Search student..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  style={{ border: 'none', background: 'none', outline: 'none', fontSize: '12px', width: '100%', color: '#0f172a' }}
-                />
+                <div style={{ display: 'flex', gap: '20px', fontSize: '11px', fontWeight: 'bold', color: '#64748b', marginTop: '12px' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '10px', height: '10px', backgroundColor: '#e2e8f0', borderRadius: '2px' }} /> Expected Fees</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '10px', height: '10px', backgroundColor: '#0f172a', borderRadius: '2px' }} /> Collected Fees</span>
+                </div>
               </div>
 
-              <select
-                value={selectedClass}
-                onChange={(e) => setSelectedClass(e.target.value)}
-                style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
-              >
-                <option value="Class">Class</option>
-                {classOptions.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
+              <div style={{ ...cardStyle, textAlign: 'center', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: '100%', minHeight: '380px' }}>
+                <div style={{ textAlign: 'left' }}>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Payment Status Breakdown</h3>
+                </div>
 
-              <select
-                value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
-                style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
-              >
-                <option value="Status">Status</option>
-                <option value="Paid">Paid</option>
-                <option value="Partially Paid">Partially Paid</option>
-                <option value="Overdue">Overdue</option>
-                <option value="Outstanding">Outstanding</option>
-              </select>
-
-              <button
-                onClick={() => setMoreFiltersOpen((v) => !v)}
-                style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: moreFiltersOpen ? '#f0f9ff' : '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-                More Filters
-              </button>
-
-              <button
-                onClick={clearAllFilters}
-                style={{ border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#64748b', cursor: 'pointer' }}
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-          {moreFiltersOpen && (
-            <div style={{ padding: '12px 20px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
-              >
-                <option value="Category">Category</option>
-                {categoryOptions.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={overdueOnly}
-                  onChange={(e) => setOverdueOnly(e.target.checked)}
-                />
-                Overdue only
-              </label>
-            </div>
-          )}
-
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left', minWidth: '700px' }}>
-              <thead>
-                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '10px', fontWeight: '800' }}>
-                  <th style={{ padding: '12px 20px' }}>STUDENT</th>
-                  <th style={{ padding: '12px 20px' }}>CLASS</th>
-                  <th style={{ padding: '12px 20px' }}>TOTAL FEES</th>
-                  <th style={{ padding: '12px 20px' }}>AMOUNT PAID</th>
-                  <th style={{ padding: '12px 20px' }}>BALANCE</th>
-                  <th style={{ padding: '12px 20px' }}>STATUS</th>
-                  <th style={{ padding: '12px 20px' }}>DUE DATE</th>
-                  <th style={{ padding: '12px 20px', textAlign: 'right' }}>ACTION</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && (
-                  <tr>
-                    <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>Loading...</td>
-                  </tr>
-                )}
-                {!loading && paginated.length === 0 && (
-                  <tr>
-                    <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
-                      No fee records match your filters.
-                    </td>
-                  </tr>
-                )}
-                {!loading && paginated.map((record) => (
-                  <tr key={record.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '12px 20px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: '#002b49', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 'bold', flexShrink: 0 }}>
-                          {record.studentInitials}
-                        </div>
-                        <div>
-                          <strong style={{ color: '#0f172a', display: 'block' }}>{record.studentName}</strong>
-                          <span style={{ fontSize: '10px', color: '#64748b' }}>{record.studentCustomId}</span>
-                        </div>
+                <div style={{ width: '100%', height: '180px', position: 'relative' }}>
+                  {loading || donutTotal === 0 ? (
+                    <div style={{ paddingTop: '60px', fontSize: '12px', color: '#64748b' }}>No fee records yet.</div>
+                  ) : (
+                    <>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Tooltip contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '12px', border: 'none' }} />
+                          <Pie data={donutData} cx="50%" cy="50%" innerRadius={55} outerRadius={75} paddingAngle={4} dataKey="value">
+                            {donutData.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            ))}
+                          </Pie>
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+                        <div style={{ fontSize: '18px', fontWeight: '900', color: '#0f172a' }}>{donutTotal}</div>
+                        <span style={{ fontSize: '9px', fontWeight: 'bold', color: '#64748b', textTransform: 'uppercase' }}>Total</span>
                       </div>
-                    </td>
-                    <td style={{ padding: '12px 20px', color: '#334155', fontWeight: 'bold' }}>{record.className}</td>
-                    <td style={{ padding: '12px 20px', color: '#334155' }}>{fmtMoney(record.totalFees)}</td>
-                    <td style={{ padding: '12px 20px', color: '#166534', fontWeight: 'bold' }}>{fmtMoney(record.amountPaid)}</td>
-                    <td style={{ padding: '12px 20px', color: record.balance === 0 ? '#166534' : '#dc2626', fontWeight: 'bold' }}>{fmtMoney(record.balance)}</td>
-                    <td style={{ padding: '12px 20px' }}>
-                      <span style={{
-                        backgroundColor: record.status === 'Paid' ? '#dcfce7' : record.status === 'Partially Paid' ? '#e0f2fe' : record.status === 'Overdue' ? '#fee2e2' : '#fef3c7',
-                        color: record.status === 'Paid' ? '#166534' : record.status === 'Partially Paid' ? '#0369a1' : record.status === 'Overdue' ? '#991b1b' : '#b45309',
-                        padding: '3px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold'
-                      }}>
-                        {record.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px 20px', color: record.status === 'Overdue' ? '#dc2626' : '#64748b', fontWeight: record.status === 'Overdue' ? 'bold' : 'normal' }}>{fmtDate(record.dueDate)}</td>
-                    <td style={{ padding: '12px 20px', textAlign: 'right' }}>
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', alignItems: 'center' }}>
-                        <button
-                          title="View Details"
-                          onClick={() => void openDetails(record)}
-                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b', padding: '4px' }}
-                        >
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                        </button>
-                        <button
-                          title="Record Payment"
-                          onClick={() => openPayment(record)}
-                          style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#002b49', padding: '4px' }}
-                        >
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </>
+                  )}
+                </div>
 
-          <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#64748b', flexWrap: 'wrap', gap: '10px' }}>
-            <div>
-              Showing <strong>{filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, filtered.length)}</strong> of <strong>{filtered.length}</strong> records
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '11px', fontWeight: 'bold', color: '#334155', textAlign: 'left' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#10b981', borderRadius: '50%' }} /> Paid ({stats?.byStatus.Paid ?? 0})</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#3b82f6', borderRadius: '50%' }} /> Partial ({stats?.byStatus['Partially Paid'] ?? 0})</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#f59e0b', borderRadius: '50%' }} /> Outstanding ({stats?.byStatus.Outstanding ?? 0})</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><span style={{ width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '50%' }} /> Overdue ({stats?.byStatus.Overdue ?? 0})</div>
+                </div>
+              </div>
+
             </div>
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-              <button
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: page <= 1 ? 'not-allowed' : 'pointer', color: '#334155', opacity: page <= 1 ? 0.5 : 1 }}
-              >
-                Previous
-              </button>
-              {pageNumbers.map((n, idx) =>
-                n === '...' ? (
-                  <span key={`gap-${idx}`} style={{ padding: '0 4px', color: '#94a3b8' }}>...</span>
-                ) : (
-                  <button
-                    key={n}
-                    onClick={() => setPage(n)}
-                    style={{
-                      padding: '4px 10px',
-                      borderRadius: '6px',
-                      border: page === n ? 'none' : '1px solid #cbd5e1',
-                      backgroundColor: page === n ? '#0f172a' : '#ffffff',
-                      color: page === n ? '#ffffff' : '#334155',
-                      fontWeight: page === n ? 'bold' : 'normal',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {n}
-                  </button>
-                )
+
+            {/* OUTSTANDING FEES BY CLASS */}
+            <div style={{ ...cardStyle, marginBottom: '24px' }}>
+              <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Outstanding Fees by Class</h3>
+              <span style={{ fontSize: '11px', color: '#64748b', display: 'block', marginBottom: '20px' }}>See which classes have the highest outstanding balances.</span>
+
+              {loading ? (
+                <div style={{ fontSize: '12px', color: '#64748b' }}>Loading...</div>
+              ) : classOut.length === 0 ? (
+                <div style={{ fontSize: '12px', color: '#64748b' }}>No outstanding balances.</div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
+                  {classOut.map((cls) => (
+                    <div key={cls.className} style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', color: '#0f172a', marginBottom: '8px' }}>
+                        <span>{cls.className}</span>
+                        <span style={{ color: '#d97706' }}>{fmtMoney(cls.amount)}</span>
+                      </div>
+                      <div style={{ width: '100%', height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{ width: `${cls.percentOfMax}%`, height: '100%', backgroundColor: '#f59e0b' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
-              <button
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: page >= totalPages ? 'not-allowed' : 'pointer', color: '#334155', opacity: page >= totalPages ? 0.5 : 1 }}
-              >
-                Next
-              </button>
+            </div>
+
+            {/* STUDENT FEE RECORDS TABLE */}
+            <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
+
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>Student Fee Records</h3>
+
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '6px 12px', width: '240px' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input
+                      type="text"
+                      placeholder="Search student..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      style={{ border: 'none', background: 'none', outline: 'none', fontSize: '12px', width: '100%', color: '#0f172a' }}
+                    />
+                  </div>
+
+                  <select
+                    value={selectedClass}
+                    onChange={(e) => setSelectedClass(e.target.value)}
+                    style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
+                  >
+                    <option value="Class">Class</option>
+                    {classOptions.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={selectedStatus}
+                    onChange={(e) => setSelectedStatus(e.target.value)}
+                    style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
+                  >
+                    <option value="Status">Status</option>
+                    <option value="Paid">Paid</option>
+                    <option value="Partially Paid">Partially Paid</option>
+                    <option value="Overdue">Overdue</option>
+                    <option value="Outstanding">Outstanding</option>
+                  </select>
+
+                  <button
+                    onClick={() => setMoreFiltersOpen((v) => !v)}
+                    style={{ padding: '7px 14px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: moreFiltersOpen ? '#f0f9ff' : '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                    More Filters
+                  </button>
+
+                  <button
+                    onClick={clearAllFilters}
+                    style={{ border: 'none', background: 'none', fontSize: '12px', fontWeight: 'bold', color: '#64748b', cursor: 'pointer' }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              {moreFiltersOpen && (
+                <div style={{ padding: '12px 20px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <select
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    style={{ padding: '7px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '12px', fontWeight: 'bold', color: '#334155' }}
+                  >
+                    <option value="Category">Category</option>
+                    {categoryOptions.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={overdueOnly}
+                      onChange={(e) => setOverdueOnly(e.target.checked)}
+                    />
+                    Overdue only
+                  </label>
+                </div>
+              )}
+
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left', minWidth: '700px' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '10px', fontWeight: '800' }}>
+                      <th style={{ padding: '12px 20px' }}>STUDENT</th>
+                      <th style={{ padding: '12px 20px' }}>CLASS</th>
+                      <th style={{ padding: '12px 20px' }}>TOTAL FEES</th>
+                      <th style={{ padding: '12px 20px' }}>AMOUNT PAID</th>
+                      <th style={{ padding: '12px 20px' }}>BALANCE</th>
+                      <th style={{ padding: '12px 20px' }}>STATUS</th>
+                      <th style={{ padding: '12px 20px' }}>DUE DATE</th>
+                      <th style={{ padding: '12px 20px', textAlign: 'right' }}>ACTION</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading && (
+                      <tr>
+                        <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>Loading...</td>
+                      </tr>
+                    )}
+                    {!loading && paginated.length === 0 && (
+                      <tr>
+                        <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
+                          No fee records match your filters.
+                        </td>
+                      </tr>
+                    )}
+                    {!loading && paginated.map((record) => (
+                      <tr key={record.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '12px 20px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: '#002b49', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', fontWeight: 'bold', flexShrink: 0 }}>
+                              {record.studentInitials}
+                            </div>
+                            <div>
+                              <strong style={{ color: '#0f172a', display: 'block' }}>{record.studentName}</strong>
+                              <span style={{ fontSize: '10px', color: '#64748b' }}>{record.studentCustomId}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ padding: '12px 20px', color: '#334155', fontWeight: 'bold' }}>{record.className}</td>
+                        <td style={{ padding: '12px 20px', color: '#334155' }}>{fmtMoney(record.totalFees)}</td>
+                        <td style={{ padding: '12px 20px', color: '#166534', fontWeight: 'bold' }}>{fmtMoney(record.amountPaid)}</td>
+                        <td style={{ padding: '12px 20px', color: record.balance === 0 ? '#166534' : '#dc2626', fontWeight: 'bold' }}>{fmtMoney(record.balance)}</td>
+                        <td style={{ padding: '12px 20px' }}>
+                          <span style={{
+                            backgroundColor: record.status === 'Paid' ? '#dcfce7' : record.status === 'Partially Paid' ? '#e0f2fe' : record.status === 'Overdue' ? '#fee2e2' : '#fef3c7',
+                            color: record.status === 'Paid' ? '#166534' : record.status === 'Partially Paid' ? '#0369a1' : record.status === 'Overdue' ? '#991b1b' : '#b45309',
+                            padding: '3px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: 'bold'
+                          }}>
+                            {record.status}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 20px', color: record.status === 'Overdue' ? '#dc2626' : '#64748b', fontWeight: record.status === 'Overdue' ? 'bold' : 'normal' }}>{fmtDate(record.dueDate)}</td>
+                        <td style={{ padding: '12px 20px', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', alignItems: 'center' }}>
+                            <button
+                              title="View Details"
+                              onClick={() => void openDetails(record)}
+                              style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b', padding: '4px' }}
+                            >
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                            </button>
+                            <button
+                              title="Record Payment"
+                              onClick={() => openPayment(record)}
+                              style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#002b49', padding: '4px' }}
+                            >
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#64748b', flexWrap: 'wrap', gap: '10px' }}>
+                <div>
+                  Showing <strong>{filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, filtered.length)}</strong> of <strong>{filtered.length}</strong> records
+                </div>
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                  <button
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: page <= 1 ? 'not-allowed' : 'pointer', color: '#334155', opacity: page <= 1 ? 0.5 : 1 }}
+                  >
+                    Previous
+                  </button>
+                  {pageNumbers.map((n, idx) =>
+                    n === '...' ? (
+                      <span key={`gap-${idx}`} style={{ padding: '0 4px', color: '#94a3b8' }}>...</span>
+                    ) : (
+                      <button
+                        key={n}
+                        onClick={() => setPage(n)}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          border: page === n ? 'none' : '1px solid #cbd5e1',
+                          backgroundColor: page === n ? '#0f172a' : '#ffffff',
+                          color: page === n ? '#ffffff' : '#334155',
+                          fontWeight: page === n ? 'bold' : 'normal',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {n}
+                      </button>
+                    )
+                  )}
+                  <button
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: page >= totalPages ? 'not-allowed' : 'pointer', color: '#334155', opacity: page >= totalPages ? 0.5 : 1 }}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </>
+        )}
+
+        {/* CREATE MASTER FEE STRUCTURE MODAL */}
+        {structureModalOpen && (
+          <div style={overlayStyle} onClick={() => !savingStructure && setStructureModalOpen(false)}>
+            <div style={{ backgroundColor: '#ffffff', borderRadius: '16px', width: '100%', maxWidth: '480px', overflow: 'hidden' }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Add Master Fee Structure</h3>
+                <button onClick={() => !savingStructure && setStructureModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
+              </div>
+
+              <form onSubmit={handleCreateStructure}>
+                <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Fee Category Name *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                      placeholder="e.g. Tuition Fee, ICT Levy"
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Amount (GHS) *</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        required
+                        value={newAmount}
+                        onChange={(e) => setNewAmount(e.target.value)}
+                        placeholder="0.00"
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Term *</label>
+                      <select
+                        value={newTerm}
+                        onChange={(e) => setNewTerm(e.target.value)}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', backgroundColor: '#ffffff' }}
+                      >
+                        <option value="Term 1">Term 1</option>
+                        <option value="Term 2">Term 2</option>
+                        <option value="Term 3">Term 3</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Academic Year *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newYear}
+                      onChange={(e) => setNewYear(e.target.value)}
+                      placeholder="2026/2027"
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Description / Notes</label>
+                    <textarea
+                      rows={2}
+                      value={newNotes}
+                      onChange={(e) => setNewNotes(e.target.value)}
+                      placeholder="Optional details..."
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                  <button
+                    type="button"
+                    onClick={() => !savingStructure && setStructureModalOpen(false)}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingStructure}
+                    style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: savingStructure ? 'wait' : 'pointer', opacity: savingStructure ? 0.7 : 1 }}
+                  >
+                    {savingStructure ? 'Saving...' : 'Save Structure'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
-
-        </div>
+        )}
 
         {/* RECORD PAYMENT MODAL */}
         {payModalOpen && payRecord && (
@@ -638,7 +910,7 @@ export const AccountantFees: React.FC = () => {
             >
               <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Record Payment</h3>
-                <button onClick={() => !paying && setPayModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>X</button>
+                <button onClick={() => !paying && setPayModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
               </div>
 
               <form onSubmit={handleRecordPayment}>
@@ -672,7 +944,7 @@ export const AccountantFees: React.FC = () => {
                     <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Method *</label>
                     <select
                       value={payMethod}
-                      onChange={(e) => setPayMethod(e.target.value as any)}
+                      onChange={(e) => setPayMethod(e.target.value as 'Mobile Money' | 'Bank Transfer' | 'Cash' | 'Card')}
                       style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
                     >
                       <option value="Cash">Cash</option>
@@ -739,7 +1011,7 @@ export const AccountantFees: React.FC = () => {
                     {detailsRecord.studentCustomId} | {detailsRecord.className} | {detailsRecord.category}
                   </span>
                 </div>
-                <button onClick={() => setDetailsOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>X</button>
+                <button onClick={() => setDetailsOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
               </div>
 
               <div style={{ padding: '20px 24px', overflowY: 'auto' }}>

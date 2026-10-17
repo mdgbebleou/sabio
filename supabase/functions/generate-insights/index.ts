@@ -11,25 +11,28 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { appType, moduleName, studentContext } = await req.json();
+    const { appType, moduleName, studentContext, userPrompt } = await req.json();
     
-    // 1. Construct prompt
-    let personaPrompt = `You are an expert AI support assistant for the Sabio school management system. Provide clear, encouraging, and helpful insights for a ${appType} regarding the ${moduleName} module.`;
-    
-    if (studentContext) {
-      personaPrompt += ` Target Student: ${studentContext.name}, Class: ${studentContext.className}, Average: ${studentContext.academicAverage}%, Attendance: ${studentContext.attendancePercentage}%.`;
+    // 1. Define prompt variables safely right at the top
+    let personaPrompt = `You are an expert AI support assistant for the Sabio school management system. Provide clear, encouraging, and helpful insights for a ${appType}.`;
+
+    if (Array.isArray(studentContext)) {
+      personaPrompt += ` Comparing multiple students: ${studentContext.map((s: any) => `${s.name} (Class:${s.className}, Avg: ${s.academicAverage}\%, Attendance:${s.attendancePercentage}%)`).join(' vs ')}.`;
+    } else if (studentContext) {
+      personaPrompt += ` Target Student: ${studentContext.name}, Class: ${studentContext.className}, Average: ${studentContext.academicAverage}%, Attendance: ${studentContext.attendancePercentage}%, Outstanding Balance: GHS ${studentContext.outstandingBalance}.`;
     }
 
-    const fullPrompt = `${personaPrompt}\n\nProvide a short, punchy summary insight (max 3 sentences).`;
+    const finalQuery = userPrompt || `Provide a short summary insight for module: ${moduleName}.`;
+    const fullPrompt = `${personaPrompt}\n\nUser Request: ${finalQuery}\n\nGive a concise, professional response (max 3 sentences).`;
 
-    // Retrieve API keys from Supabase cloud secrets
+    // 2. Retrieve API keys from Supabase cloud secrets
     const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
     const openAiApiKey = Deno.env.get('OPENAI_API_KEY');
 
     let insights = '';
     let usedProvider = 'gemini';
 
-    // 2. Try Google Gemini API first
+    // 3. Try Google Gemini API first
     if (geminiApiKey) {
       try {
         const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${geminiApiKey}`, {
@@ -48,19 +51,14 @@ serve(async (req: Request) => {
           const geminiData = JSON.parse(responseText);
           insights = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
         } else {
-          // Check for 429 Rate Limit
-          if (geminiResponse.status === 429 || responseText.includes('RESOURCE_EXHAUSTED')) {
-            console.warn('Gemini quota hit (429). Failing over to OpenAI backup...');
-          } else {
-            console.warn(`Gemini HTTP error ${geminiResponse.status}: ${responseText}. Failing over to OpenAI...`);
-          }
+          console.warn(`Gemini HTTP error ${geminiResponse.status}: ${responseText}. Failing over to OpenAI...`);
         }
       } catch (geminiErr) {
         console.warn('Gemini network/runtime exception, failing over to OpenAI:', geminiErr);
       }
     }
 
-    // 3. Fallback to OpenAI if Gemini failed, hit rate limit, or key was missing
+    // 4. Fallback to OpenAI if Gemini failed or key was missing
     if (!insights && openAiApiKey) {
       try {
         usedProvider = 'openai';
@@ -79,20 +77,6 @@ serve(async (req: Request) => {
             temperature: 0.7,
           }),
         });
-
-        // Inside your Deno Edge Function switch block:
-const { appType, moduleName, studentContext, userPrompt } = await req.json();
-
-let personaPrompt = `You are an expert AI support assistant for the Sabio school management system. Provide clear, encouraging, and helpful insights for a ${appType}.`;
-
-if (Array.isArray(studentContext)) {
-  personaPrompt += ` Comparing multiple students: ${studentContext.map(s => `${s.name} (Class:${s.className}, Avg: ${s.academicAverage}\%, Attendance:${s.attendancePercentage}%)`).join(' vs ')}.`;
-} else if (studentContext) {
-  personaPrompt += ` Target Student: ${studentContext.name}, Class: ${studentContext.className}, Average: ${studentContext.academicAverage}%, Attendance: ${studentContext.attendancePercentage}%, Outstanding Balance: GHS ${studentContext.outstandingBalance}.`;
-}
-
-const finalQuery = userPrompt || `Provide a short summary insight for ${moduleName}.`;
-const fullPrompt = `${personaPrompt}\n\nUser Question / Request: ${finalQuery}\n\nGive a concise, professional response.`;
 
         const openAiData = await openAiResponse.json();
         if (openAiResponse.ok && openAiData.choices && openAiData.choices.length > 0) {
@@ -128,4 +112,3 @@ const fullPrompt = `${personaPrompt}\n\nUser Question / Request: ${finalQuery}\n
     );
   }
 });
-  

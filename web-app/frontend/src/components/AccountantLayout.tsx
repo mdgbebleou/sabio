@@ -8,6 +8,14 @@ interface AccountantLayoutProps {
   children: React.ReactNode;
 }
 
+interface StudentOption {
+  id: string;
+  first_name: string;
+  last_name: string;
+  custom_id: string;
+  class_name: string;
+}
+
 export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -17,8 +25,27 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const [me, setMe] = useState<MyProfile | null>(null);
 
+  // Global "Record Payment" Modal States
+  const [isRecordPaymentOpen, setIsRecordPaymentOpen] = useState(false);
+  const [studentsList, setStudentsList] = useState<StudentOption[]>([]);
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [paymentReference, setPaymentReference] = useState('');
+  const [paymentNotes, setPaymentNotes] = useState('');
+  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+
   useEffect(() => {
     getMyProfile().then(setMe).catch(() => setMe(null));
+  }, []);
+
+  // Fetch students for the global payment modal lookup
+  useEffect(() => {
+    const fetchStudents = async () => {
+      const { data } = await supabase.from('students').select('id, first_name, last_name, custom_id, class_name');
+      if (data) setStudentsList(data as StudentOption[]);
+    };
+    void fetchStudents();
   }, []);
 
   useEffect(() => {
@@ -64,6 +91,102 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
     localStorage.removeItem('user_email');
     localStorage.removeItem('user_first_name');
     navigate('/login');
+  };
+
+const handleSaveGlobalPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedStudentId) {
+      alert('Please select a student.');
+      return;
+    }
+    const amountNum = parseFloat(paymentAmount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      alert('Please enter a valid payment amount greater than 0.');
+      return;
+    }
+
+    setIsSubmittingPayment(true);
+    try {
+      const targetStudent = studentsList.find(s => s.id === selectedStudentId);
+      const studentFullName = targetStudent ? `${targetStudent.first_name} ${targetStudent.last_name}` : 'Unknown Student';
+
+      // 1. Find or create a fee ledger row for the student to satisfy the `fee_id` constraint
+      let { data: existingFee } = await supabase
+        .from('fees')
+        .select('id, amount_paid, balance')
+        .eq('student_id', selectedStudentId)
+        .maybeSingle();
+
+      let targetFeeId = existingFee?.id;
+
+      if (!targetFeeId) {
+        const { data: newFeeData, error: newFeeError } = await supabase
+          .from('fees')
+          .insert([
+            {
+              student_id: selectedStudentId,
+              total_fees: amountNum,
+              amount_paid: 0,
+              balance: amountNum,
+              status: 'Unpaid',
+              term: 'Term 1',
+              category: 'School Fees',
+              invoice_number: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
+              invoice_status: 'Generated',
+            }
+          ])
+          .select('id')
+          .single();
+
+        if (newFeeError) {
+          throw new Error(`Failed to initialize student fee ledger: ${newFeeError.message}`);
+        }
+        targetFeeId = newFeeData?.id;
+      }
+
+      // 2. Insert into fee_payments ledger table including the required fee_id
+      const { error: payError } = await supabase.from('fee_payments').insert([
+        {
+          fee_id: targetFeeId,
+          student_id: selectedStudentId,
+          amount: amountNum,
+          method: paymentMethod,
+          reference: paymentReference || `REF-${Math.floor(100000 + Math.random() * 900000)}`,
+          status: 'Completed',
+          notes: paymentNotes ? `${studentFullName}: ${paymentNotes}` : studentFullName,
+          paid_at: new Date().toISOString(),
+        }
+      ]);
+
+      if (payError) {
+        throw new Error(payError.message);
+      }
+
+      // 3. Update the student ledger row in the `fees` table
+      if (existingFee) {
+        const newAmountPaid = Number(existingFee.amount_paid || 0) + amountNum;
+        const newBalance = Math.max(0, Number(existingFee.balance || 0) - amountNum);
+        await supabase
+          .from('fees')
+          .update({ amount_paid: newAmountPaid, balance: newBalance, status: newBalance === 0 ? 'Paid' : 'Part-Paid' })
+          .eq('id', existingFee.id);
+      }
+
+      alert(`Successfully recorded payment of GHS ${amountNum.toLocaleString()} for ${studentFullName}!`);
+      setIsRecordPaymentOpen(false);
+      setSelectedStudentId('');
+      setPaymentAmount('');
+      setPaymentReference('');
+      setPaymentNotes('');
+      
+      window.location.reload();
+    } catch (err: unknown) {
+      console.error('Error recording global payment:', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      alert(`Failed to record payment: ${errorMessage}`);
+    } finally {
+      setIsSubmittingPayment(false);
+    }
   };
 
   const accountantMenuItems = [
@@ -138,7 +261,15 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
               onClick={() => navigate('/finance-dashboard')}
               style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: isCollapsed ? 0 : '8px', cursor: 'pointer' }}
             >
-              <img src="/logo.png" alt="SABIO" onError={(e) => { (e.target as any).style.display = 'none'; }} style={{ height: '32px', objectFit: 'contain' }} />
+              <img 
+                src="/logo.png" 
+                alt="SABIO" 
+                onError={(e) => { 
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none'; 
+                }} 
+                style={{ height: '32px', objectFit: 'contain' }} 
+              />
               {!isCollapsed && (
                 <div>
                   <div style={{ fontSize: '18px', fontWeight: '900', color: '#002b49', letterSpacing: '-0.5px' }}>SABIO</div>
@@ -190,7 +321,7 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
           </nav>
         </div>
 
-        {/* SIDEBAR FOOTER â€” profile row + 3-dot menu */}
+        {/* SIDEBAR FOOTER */}
         <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '12px' }}>
           <div
             ref={profileMenuRef}
@@ -204,7 +335,6 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
               borderRadius: '8px'
             }}
           >
-            {/* Left: avatar + name (clickable to profile) */}
             <div
               onClick={(e) => {
                 e.preventDefault();
@@ -258,7 +388,6 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
               )}
             </div>
 
-            {/* Right: 3-dot menu button */}
             <button
               type="button"
               onClick={(e) => {
@@ -287,7 +416,6 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
               </svg>
             </button>
 
-            {/* Dropdown menu */}
             {profileMenuOpen && (
               <div
                 style={{
@@ -386,7 +514,7 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <button
-              onClick={() => navigate('/accountant/payments')}
+              onClick={() => setIsRecordPaymentOpen(true)}
               style={{ backgroundColor: theme.btnBg, color: '#fff', border: 'none', borderRadius: '20px', padding: '8px 16px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
@@ -436,7 +564,6 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
               )}
             </button>
           </div>
-
         </header>
 
         {/* WORKSPACE & FOOTER */}
@@ -456,6 +583,115 @@ export const AccountantLayout: React.FC<AccountantLayoutProps> = ({ children }) 
         </main>
 
       </div>
+
+      {/* ========================================================================= */}
+      {/* GLOBAL RECORD PAYMENT MODAL */}
+      {/* ========================================================================= */}
+      {isRecordPaymentOpen && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.6)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: '16px'
+        }}>
+          <div style={{
+            backgroundColor: theme.sidebarBg, color: theme.text, borderRadius: '20px', width: '100%', maxWidth: '540px',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', overflow: 'hidden', border: `1px solid ${theme.border}`
+          }}>
+            <div style={{ padding: '20px 24px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800' }}>Record Fee Payment</h3>
+                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: theme.subText }}>Log an institutional payment and update the student ledger instantly.</p>
+              </div>
+              <button onClick={() => setIsRecordPaymentOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: theme.subText }}>✕</button>
+            </div>
+
+            <form onSubmit={handleSaveGlobalPayment} style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: theme.subText, display: 'block', marginBottom: '6px' }}>Select Student *</label>
+                <select
+                  value={selectedStudentId}
+                  onChange={(e) => setSelectedStudentId(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, fontSize: '13px', backgroundColor: theme.bg, color: theme.text }}
+                  required
+                >
+                  <option value="">Choose student...</option>
+                  {studentsList.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.first_name} {st.last_name} ({st.custom_id || 'No ID'}) — Class: {st.class_name || 'N/A'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: theme.subText, display: 'block', marginBottom: '6px' }}>Amount (GHS) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    placeholder="0.00"
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, fontSize: '13px', backgroundColor: theme.bg, color: theme.text, boxSizing: 'border-box' }}
+                    required
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '11px', fontWeight: 'bold', color: theme.subText, display: 'block', marginBottom: '6px' }}>Payment Method *</label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, fontSize: '13px', backgroundColor: theme.bg, color: theme.text }}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Mobile Money">Mobile Money (Momo)</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Cheque">Cheque</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: theme.subText, display: 'block', marginBottom: '6px' }}>Reference / Transaction ID</label>
+                <input
+                  type="text"
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  placeholder="e.g. MOMO-9823746 or Bank Ref"
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, fontSize: '13px', backgroundColor: theme.bg, color: theme.text, boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: theme.subText, display: 'block', marginBottom: '6px' }}>Notes / Remarks</label>
+                <textarea
+                  value={paymentNotes}
+                  onChange={(e) => setPaymentNotes(e.target.value)}
+                  placeholder="Additional teller notes..."
+                  style={{ width: '100%', height: '60px', padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, fontSize: '13px', backgroundColor: theme.bg, color: theme.text, boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsRecordPaymentOpen(false)}
+                  style={{ padding: '9px 16px', borderRadius: '8px', border: `1px solid ${theme.border}`, backgroundColor: 'transparent', fontSize: '13px', fontWeight: 'bold', color: theme.text, cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingPayment}
+                  style={{ padding: '9px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: 'pointer', opacity: isSubmittingPayment ? 0.7 : 1 }}
+                >
+                  {isSubmittingPayment ? 'Processing...' : 'Submit Payment'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -13,6 +13,8 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { getPaymentsDetailed, getPaymentStats } from '../services/teacherService';
+import { recordPaymentTransaction } from '../services/accountService';
+import { supabase } from '../services/supabase';
 import type { PaymentDetailedRow, PaymentStats } from '../services/teacherService';
 
 const fmtMoney = (n: number): string =>
@@ -127,6 +129,14 @@ const buildCsv = (rows: PaymentDetailedRow[]): string => {
   return [header.map(escape).join(','), ...lines.map((r) => r.map(escape).join(','))].join('\n');
 };
 
+interface FeeItemOption {
+  feeId: string;
+  studentId: string;
+  studentName: string;
+  category: string;
+  balance: number;
+}
+
 export const AccountantPayments: React.FC = () => {
   const [payments, setPayments] = useState<PaymentDetailedRow[]>([]);
   const [stats, setStats] = useState<PaymentStats | null>(null);
@@ -142,6 +152,16 @@ export const AccountantPayments: React.FC = () => {
   const [methodFilter, setMethodFilter] = useState('Method');
   const [statusFilter, setStatusFilter] = useState('Status');
 
+  // Record payment modal states
+  const [payModalOpen, setPayModalOpen] = useState(false);
+  const [feeOptions, setFeeOptions] = useState<FeeItemOption[]>([]);
+  const [selectedFeeId, setSelectedFeeId] = useState('');
+  const [payAmount, setPayAmount] = useState('');
+  const [payMethod, setPayMethod] = useState<'Cash' | 'Mobile Money' | 'Bank Transfer' | 'Card'>('Mobile Money');
+  const [payReference, setPayReference] = useState('');
+  const [payNotes, setPayNotes] = useState('');
+  const [recording, setRecording] = useState(false);
+
   const cardStyle: React.CSSProperties = {
     backgroundColor: '#ffffff',
     border: '1px solid #e2e8f0',
@@ -149,6 +169,13 @@ export const AccountantPayments: React.FC = () => {
     padding: '20px',
     boxShadow: '0 1px 3px rgba(0, 0, 0, 0.03)',
     boxSizing: 'border-box',
+  };
+
+  const overlayStyle: React.CSSProperties = {
+    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)', backdropFilter: 'blur(4px)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 1000, padding: '16px',
   };
 
   const load = useCallback(async () => {
@@ -168,6 +195,84 @@ export const AccountantPayments: React.FC = () => {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const openPaymentModal = async () => {
+    try {
+      // Fetch unpaid or partially paid student fee ledgers for selection
+      const { data, error: err } = await supabase
+        .from('fees')
+        .select(`
+          id,
+          student_id,
+          category,
+          balance,
+          students (
+            first_name,
+            last_name,
+            custom_id
+          )
+        `)
+        .gt('balance', 0);
+
+      if (err) throw err;
+
+      const options: FeeItemOption[] = (data || []).map((f: any) => ({
+        feeId: f.id,
+        studentId: f.student_id,
+        studentName: f.students ? `${f.students.first_name} ${f.students.last_name} (${f.students.custom_id})` : 'Unknown',
+        category: f.category || 'General Fee',
+        balance: Number(f.balance || 0),
+      }));
+
+      setFeeOptions(options);
+      if (options.length > 0) setSelectedFeeId(options[0].feeId);
+      setPayAmount('');
+      setPayReference('');
+      setPayNotes('');
+      setPayModalOpen(true);
+    } catch (e: any) {
+      alert(`Could not load fee accounts for payment: ${e.message}`);
+    }
+  };
+
+  const handleRecordPaymentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedFeeId || !payAmount) {
+      alert('Please select a student fee and enter an amount.');
+      return;
+    }
+    const amt = parseFloat(payAmount);
+    if (isNaN(amt) || amt <= 0) {
+      alert('Please enter a valid payment amount.');
+      return;
+    }
+
+    const currentFee = feeOptions.find((f) => f.feeId === selectedFeeId);
+    if (currentFee && amt > currentFee.balance) {
+      alert(`Amount exceeds remaining balance (${fmtMoney(currentFee.balance)}).`);
+      return;
+    }
+
+    setRecording(true);
+    try {
+      await recordPaymentTransaction({
+        feeId: selectedFeeId,
+        studentId: currentFee?.studentId || '',
+        amount: amt,
+        method: payMethod,
+        reference: payReference || null,
+        notes: payNotes || null,
+      });
+
+      setPayModalOpen(false);
+      alert('Payment recorded successfully!');
+      await load();
+    } catch (err: any) {
+      alert(`Failed to record payment: ${err.message}`);
+    } finally {
+      setRecording(false);
+    }
+  };
 
   // Trend data
   const trendData = useMemo(() => bucketPayments(payments, timeframe), [payments, timeframe]);
@@ -215,7 +320,6 @@ export const AccountantPayments: React.FC = () => {
     (p) => p.status === 'Pending' || p.status === 'Verification Required'
   ).length;
 
-  // For refunds — no schema support yet, so show 0
   const refundedAmount = 0;
   const refundedCount = 0;
 
@@ -267,14 +371,22 @@ export const AccountantPayments: React.FC = () => {
     <AccountantLayout>
       <div style={{ padding: 'clamp(16px, 3vw, 30px)', maxWidth: '1600px', margin: '0 auto', fontFamily: "'Inter', sans-serif" }}>
 
-        {/* PAGE TITLE */}
-        <div style={{ marginBottom: '24px' }}>
-          <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.5px' }}>
-            Payments
-          </h1>
-          <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>
-            View and manage all fee payments received by the school
-          </p>
+        {/* PAGE TITLE & RECORD PAYMENT BUTTON */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.5px' }}>
+              Payments
+            </h1>
+            <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>
+              View and manage all fee payments received by the school
+            </p>
+          </div>
+          <button
+            onClick={openPaymentModal}
+            style={{ padding: '10px 18px', borderRadius: '10px', border: 'none', backgroundColor: '#002b49', color: '#ffffff', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}
+          >
+            + Record Payment
+          </button>
         </div>
 
         {error && (
@@ -623,6 +735,109 @@ export const AccountantPayments: React.FC = () => {
           </div>
 
         </div>
+
+        {/* RECORD PAYMENT MODAL */}
+        {payModalOpen && (
+          <div style={overlayStyle} onClick={() => !recording && setPayModalOpen(false)}>
+            <div style={{ backgroundColor: '#ffffff', borderRadius: '16px', width: '100%', maxWidth: '480px', overflow: 'hidden' }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: '#0f172a' }}>Record Payment</h3>
+                <button onClick={() => !recording && setPayModalOpen(false)} style={{ border: 'none', background: 'none', fontSize: '18px', cursor: 'pointer', color: '#64748b' }}>✕</button>
+              </div>
+
+              <form onSubmit={handleRecordPaymentSubmit}>
+                <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Select Student Fee *</label>
+                    <select
+                      required
+                      value={selectedFeeId}
+                      onChange={(e) => setSelectedFeeId(e.target.value)}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', backgroundColor: '#ffffff', boxSizing: 'border-box' }}
+                    >
+                      {feeOptions.length === 0 ? (
+                        <option value="">No outstanding student fees found</option>
+                      ) : (
+                        feeOptions.map((opt) => (
+                          <option key={opt.feeId} value={opt.feeId}>
+                            {opt.studentName} — {opt.category} (Bal: {fmtMoney(opt.balance)})
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Amount (GHS) *</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        required
+                        value={payAmount}
+                        onChange={(e) => setPayAmount(e.target.value)}
+                        placeholder="0.00"
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Method *</label>
+                      <select
+                        value={payMethod}
+                        onChange={(e) => setPayMethod(e.target.value as any)}
+                        style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', backgroundColor: '#ffffff', boxSizing: 'border-box' }}
+                      >
+                        <option value="Mobile Money">Mobile Money</option>
+                        <option value="Cash">Cash</option>
+                        <option value="Bank Transfer">Bank Transfer</option>
+                        <option value="Card">Card</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Reference (optional)</label>
+                    <input
+                      type="text"
+                      value={payReference}
+                      onChange={(e) => setPayReference(e.target.value)}
+                      placeholder="e.g. MoMo transaction ID"
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '11px', fontWeight: 'bold', color: '#334155', display: 'block', marginBottom: '4px' }}>Notes</label>
+                    <textarea
+                      rows={2}
+                      value={payNotes}
+                      onChange={(e) => setPayNotes(e.target.value)}
+                      placeholder="Optional notes..."
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box', resize: 'vertical' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ padding: '16px 24px', backgroundColor: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                  <button
+                    type="button"
+                    onClick={() => !recording && setPayModalOpen(false)}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', fontSize: '13px', fontWeight: 'bold', color: '#334155', cursor: 'pointer' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={recording || feeOptions.length === 0}
+                    style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', backgroundColor: '#002b49', fontSize: '13px', fontWeight: 'bold', color: '#ffffff', cursor: recording ? 'wait' : 'pointer', opacity: recording ? 0.7 : 1 }}
+                  >
+                    {recording ? 'Recording...' : 'Record Payment'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
       </div>
     </AccountantLayout>

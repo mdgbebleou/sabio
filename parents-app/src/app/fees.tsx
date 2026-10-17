@@ -11,7 +11,7 @@ interface FeeItem {
   id: string;
   name: string;
   amount: number;
-  status: 'Paid' | 'Outstanding';
+  status: 'Paid' | 'Partially Paid' | 'Overdue' | 'Outstanding';
 }
 
 interface PaymentTransaction {
@@ -32,11 +32,14 @@ const FeesScreen: React.FC = () => {
   const [isChildSelectorOpen, setIsChildSelectorOpen] = useState(false);
   const [tempSelectedStudent, setTempSelectedStudent] = useState<any | null>(null);
   
-  // Dynamic fee data states with empty placeholders for future backend connection
+  // Dynamic fee data states
   const [loadingFees, setLoadingFees] = useState(false);
   const [feeItems, setFeeItems] = useState<FeeItem[]>([]);
   const [payments, setPayments] = useState<PaymentTransaction[]>([]);
-  const [deadline] = useState('August 20, 2026');
+  const [totalFeesCalc, setTotalFeesCalc] = useState(0);
+  const [paidFeesCalc, setPaidFeesCalc] = useState(0);
+  const [outstandingCalc, setOutstandingCalc] = useState(0);
+  const [deadline] = useState('Next Billing Due');
 
   // Sync temp selector when global selectedStudent changes
   useEffect(() => {
@@ -54,41 +57,65 @@ const FeesScreen: React.FC = () => {
       try {
         setLoadingFees(true);
 
-        // 1. Fetch custom fee breakdown items for this student from Supabase
-        const { data: feesData } = await supabase
-          .from('student_fees')
+        // 1. Fetch itemized fees for this student from the `fees` table schema
+        const { data: feesData, error: feesError } = await supabase
+          .from('fees')
           .select('*')
           .eq('student_id', selectedStudent.id);
 
+        if (feesError) console.error('Error fetching fees:', feesError);
+
+        let calculatedTotal = 0;
+        let calculatedPaid = 0;
+        let calculatedOutstanding = 0;
+
         if (feesData && feesData.length > 0 && isMounted) {
-          setFeeItems(feesData.map((f: any) => ({
-            id: f.id,
-            name: f.name,
-            amount: f.amount,
-            status: f.status || 'Outstanding'
-          })));
+          const items: FeeItem[] = feesData.map((f: any) => {
+            const tFees = Number(f.total_fees || 0);
+            const aPaid = Number(f.amount_paid || 0);
+            const bal = Number(f.balance || tFees - aPaid);
+
+            calculatedTotal += tFees;
+            calculatedPaid += aPaid;
+            calculatedOutstanding += bal;
+
+            return {
+              id: f.id,
+              name: f.category || 'School Fees',
+              amount: tFees,
+              status: f.status || 'Outstanding'
+            };
+          });
+
+          setFeeItems(items);
+          setTotalFeesCalc(calculatedTotal);
+          setPaidFeesCalc(calculatedPaid);
+          setOutstandingCalc(calculatedOutstanding);
         } else if (isMounted) {
-          // Empty placeholder ready for backend integration
           setFeeItems([]);
+          setTotalFeesCalc(0);
+          setPaidFeesCalc(0);
+          setOutstandingCalc(0);
         }
 
-        // 2. Fetch payment history logs from Supabase
-        const { data: payData } = await supabase
-          .from('payment_history')
+        // 2. Fetch payment history logs from Supabase `fee_payments` table
+        const { data: payData, error: payError } = await supabase
+          .from('fee_payments')
           .select('*')
           .eq('student_id', selectedStudent.id)
           .order('created_at', { ascending: false });
 
+        if (payError) console.error('Error fetching payments:', payError);
+
         if (payData && payData.length > 0 && isMounted) {
           setPayments(payData.map((p: any) => ({
             id: p.id,
-            title: p.title || 'School Fees Payment',
-            amount: p.amount,
+            title: p.payment_method ? `Fee Payment (${p.payment_method})` : 'School Fees Payment',
+            amount: Number(p.amount || 0),
             date: new Date(p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-            status: p.status || 'Successful'
+            status: 'Successful'
           })));
         } else if (isMounted) {
-          // Empty placeholder ready for backend integration
           setPayments([]);
         }
       } catch (err) {
@@ -113,9 +140,9 @@ const FeesScreen: React.FC = () => {
     );
   }
 
-  const totalFees = selectedStudent ? selectedStudent.totalFees || 0 : 0;
-  const paidFees = selectedStudent ? selectedStudent.paidFees || 0 : 0;
-  const outstandingBalance = selectedStudent ? selectedStudent.outstandingBalance : 0;
+  const totalFees = totalFeesCalc > 0 ? totalFeesCalc : (selectedStudent ? selectedStudent.totalFees || 0 : 0);
+  const paidFees = paidFeesCalc > 0 ? paidFeesCalc : (selectedStudent ? selectedStudent.paidFees || 0 : 0);
+  const outstandingBalance = outstandingCalc > 0 ? outstandingCalc : (selectedStudent ? selectedStudent.outstandingBalance : 0);
   const percentagePaid = totalFees > 0 ? Math.round((paidFees / totalFees) * 100) : 0;
 
   return (
@@ -172,7 +199,7 @@ const FeesScreen: React.FC = () => {
                       {selectedStudent.firstName} {selectedStudent.lastName}
                     </Text>
                     <Text style={{ fontSize: 11, color: theme.icon, marginTop: 2 }}>
-                      {selectedStudent.className} • 2026 Academic Year
+                      {selectedStudent.className} • Academic Year
                     </Text>
                   </View>
                 </View>
@@ -183,23 +210,23 @@ const FeesScreen: React.FC = () => {
               <View style={{ backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border, borderRadius: 24, padding: 20, marginBottom: 16 }}>
                 <Text style={{ fontSize: 12, fontWeight: '700', color: theme.icon, marginBottom: 4 }}>OUTSTANDING BALANCE</Text>
                 <Text style={{ fontSize: 32, fontWeight: '900', color: theme.text, marginBottom: 16 }}>
-                  GHS {outstandingBalance.toLocaleString()}
+                  GHS {outstandingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </Text>
 
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12, paddingBottom: 12, borderBottomWidth: 1, borderColor: theme.border }}>
                   <View>
                     <Text style={{ fontSize: 11, color: theme.icon }}>Total Fees</Text>
-                    <Text style={{ fontSize: 15, fontWeight: '800', color: theme.text, marginTop: 2 }}>GHS {totalFees.toLocaleString()}</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '800', color: theme.text, marginTop: 2 }}>GHS {totalFees.toLocaleString(undefined, { minimumFractionDigits: 2 })}</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
                     <Text style={{ fontSize: 11, color: theme.icon }}>Amount Paid</Text>
-                    <Text style={{ fontSize: 15, fontWeight: '800', color: '#166534', marginTop: 2 }}>GHS {paidFees.toLocaleString()}</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '800', color: '#166534', marginTop: 2 }}>GHS {paidFees.toLocaleString(undefined, { minimumFractionDigits: 2 })}</Text>
                   </View>
                 </View>
 
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <Text style={{ fontSize: 12, fontWeight: 'bold', color: theme.text }}>{percentagePaid}% of fees paid</Text>
-                  <Text style={{ fontSize: 12, color: theme.icon }}>Next deadline: {deadline}</Text>
+                  <Text style={{ fontSize: 12, color: theme.icon }}>{deadline}</Text>
                 </View>
 
                 {/* PROGRESS BAR */}
@@ -215,7 +242,7 @@ const FeesScreen: React.FC = () => {
                     <Ionicons name="alert-circle" size={22} color="#c2410c" style={{ marginTop: 2 }} />
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: 13, fontWeight: '700', color: '#9a3412', lineHeight: 18 }}>
-                        Payment Reminder: GHS {outstandingBalance.toLocaleString()} remains outstanding. Payment due by {deadline}.
+                        Payment Reminder: GHS {outstandingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} remains outstanding.
                       </Text>
                     </View>
                   </View>
@@ -269,7 +296,7 @@ const FeesScreen: React.FC = () => {
                             </Text>
                           </View>
                         </View>
-                        <Text style={{ fontSize: 15, fontWeight: '800', color: theme.text }}>GHS {item.amount.toLocaleString()}</Text>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: theme.text }}>GHS {item.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</Text>
                       </View>
                     );
                   })
@@ -309,7 +336,7 @@ const FeesScreen: React.FC = () => {
                       </View>
 
                       <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={{ fontSize: 16, fontWeight: '900', color: '#1e3a8a' }}>GHS {p.amount.toLocaleString()}</Text>
+                        <Text style={{ fontSize: 16, fontWeight: '900', color: '#1e3a8a' }}>GHS {p.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</Text>
                         <TouchableOpacity onPress={() => router.push(`/fees/receipt?id=${p.id}` as any)} style={{ marginTop: 8 }}>
                           <Text style={{ fontSize: 12, fontWeight: 'bold', color: theme.tint }}>View Receipt</Text>
                         </TouchableOpacity>

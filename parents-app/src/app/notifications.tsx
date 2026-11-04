@@ -33,10 +33,12 @@ const NotificationsScreen: React.FC = () => {
         return;
       }
 
+      // Fetch notifications but explicitly exclude message types so chat stays out of here
       const { data, error } = await supabase
         .from('notifications')
         .select('*')
         .eq('user_id', session.user.id)
+        .neq('type', 'message') // 👈 Excludes chat/messages from the notifications page
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -74,6 +76,7 @@ const NotificationsScreen: React.FC = () => {
         .from('notifications')
         .update({ is_read: true })
         .eq('user_id', session.user.id)
+        .neq('type', 'message')
         .eq('is_read', false);
 
       if (error) {
@@ -115,7 +118,6 @@ const NotificationsScreen: React.FC = () => {
   const getNotificationIcon = (type: string) => {
     switch (type) {
       case 'academic': return { name: 'school-outline', bg: '#dbeafe', color: '#1d4ed8' };
-      case 'message': return { name: 'chatbubbles-outline', bg: '#dcfce7', color: '#166534' };
       case 'fee': return { name: 'alert-circle-outline', bg: '#fee2e2', color: '#991b1b' };
       case 'attendance': return { name: 'time-outline', bg: '#fef3c7', color: '#b45309' };
       default: return { name: 'notifications-outline', bg: '#f3f4f6', color: '#374151' };

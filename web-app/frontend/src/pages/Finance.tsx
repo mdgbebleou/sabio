@@ -27,6 +27,7 @@ interface StudentRecord {
 
 interface FeeStructureRecord {
   id: string;
+  name?: string;
   academic_year: string;
   term: string;
   category: string;
@@ -55,7 +56,7 @@ export const Finance: React.FC = () => {
   const [selectedTerm, setSelectedTerm] = useState('Term 1');
 
   // Dynamic State
-  const [recentPayments, setRecentPayments] = useState<RecentPayment[]>([]);
+  const [recentPayments] = useState<RecentPayment[]>([]);
   const [kpiData, setKpiData] = useState({
     expectedFees: 'GHS 0.00',
     collectedFees: 'GHS 0.00',
@@ -102,13 +103,13 @@ export const Finance: React.FC = () => {
       // Fetch students along with their class and grade relation if available
       const { data: studentData } = await supabase.from('students').select('*, classes:class_id(id, grade, name)');
       if (studentData) {
-        const formattedStudents: StudentRecord[] = studentData.map((st: any) => ({
-          id: st.id,
-          custom_id: st.custom_id,
-          first_name: st.first_name,
-          last_name: st.last_name,
-          class_id: st.class_id,
-          class_name: st.classes?.name || st.class_name || 'Unassigned',
+        const formattedStudents: StudentRecord[] = studentData.map((st: Record<string, unknown>) => ({
+          id: st.id as string,
+          custom_id: st.custom_id as string,
+          first_name: st.first_name as string,
+          last_name: st.last_name as string,
+          class_id: st.class_id as string | undefined,
+          class_name: (st.classes as { name?: string })?.name || (st.class_name as string) || 'Unassigned',
         }));
         setStudentsList(formattedStudents);
         setKpiData(prev => ({ ...prev, studentCount: formattedStudents.length }));
@@ -125,7 +126,7 @@ export const Finance: React.FC = () => {
         let totalCollected = 0;
         let totalOutstanding = 0;
 
-        feesData.forEach((f: any) => {
+        feesData.forEach((f: Record<string, unknown>) => {
           totalExpected += Number(f.total_fees || 0);
           totalCollected += Number(f.amount_paid || 0);
           totalOutstanding += Number(f.balance || 0);
@@ -147,6 +148,7 @@ export const Finance: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchFinanceData();
   }, [fetchFinanceData]);
 
@@ -165,9 +167,10 @@ export const Finance: React.FC = () => {
 
     setSavingStructure(true);
     try {
-      // 1. Insert master fee structure record
+      // 1. Insert master fee structure record including name
       const { error: insErr } = await supabase.from('fee_structures').insert([
         {
+          name: newFeeName.trim() || newFeeCategory.trim(),
           category: newFeeCategory.trim(),
           amount: amt,
           term: selectedTerm,
@@ -181,20 +184,18 @@ export const Finance: React.FC = () => {
       // 2. Precisely filter target students based on selected scope
       let targetStudents = studentsList;
       if (scopeType === 'grades' && selectedGradeIds.length > 0) {
-        // Fetch matching classes for the selected grade IDs to ensure accurate filtering
         const { data: matchingClasses } = await supabase
           .from('classes')
           .select('id')
-          .in('grade_id', selectedGradeIds); // or check if class belongs to selected grades
+          .in('grade_id', selectedGradeIds);
 
-        const classIds = matchingClasses ? matchingClasses.map((c: any) => c.id) : [];
+        const classIds = matchingClasses ? matchingClasses.map((c: Record<string, unknown>) => c.id as string) : [];
 
         targetStudents = studentsList.filter(st => {
           return selectedGradeIds.includes(st.class_id || '') || classIds.includes(st.class_id || '');
         });
       }
 
-      // If scope is 'all', targetStudents remains all students. If 'grades' was selected but none matched, target is empty.
       if (scopeType === 'grades' && targetStudents.length === 0) {
         alert('Fee structure created, but no students were found matching the selected grade(s).');
       } else if (targetStudents.length > 0) {
@@ -225,15 +226,16 @@ export const Finance: React.FC = () => {
             await supabase.from('fees').insert([
               {
                 student_id: st.id,
-                total_fees: amt,
-                amount_paid: 0,
-                balance: amt,
-                status: 'Outstanding',
-                due_date: defaultDueDate,
-                term: selectedTerm,
-                category: newFeeCategory.trim(),
-                invoice_number: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
-                invoice_status: 'Sent',
+    name: newFeeName.trim() || newFeeCategory.trim(), // ✅ Ensure this is present
+    total_fees: amt,
+    amount_paid: 0,
+    balance: amt,
+    status: 'Outstanding',
+    due_date: defaultDueDate,
+    term: selectedTerm,
+    category: newFeeCategory.trim(),
+    invoice_number: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
+    invoice_status: 'Sent',
               },
             ]);
           }
@@ -250,9 +252,9 @@ export const Finance: React.FC = () => {
       setSelectedGradeIds([]);
       setScopeType('all');
       void fetchFinanceData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Unexpected error creating fee structure:', err);
-      alert(`Failed to save fee structure: ${err.message || err}`);
+      alert(`Failed to save fee structure: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSavingStructure(false);
     }
@@ -385,7 +387,7 @@ export const Finance: React.FC = () => {
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
               <thead>
                 <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: '11px', fontWeight: '800', textTransform: 'uppercase' }}>
-                  <th style={{ padding: '12px 20px' }}>Category</th>
+                  <th style={{ padding: '12px 20px' }}>Fee Name</th>
                   <th style={{ padding: '12px 20px' }}>Academic Year & Term</th>
                   <th style={{ padding: '12px 20px' }}>Base Amount</th>
                   <th style={{ padding: '12px 20px' }}>Notes / Description</th>
@@ -402,7 +404,7 @@ export const Finance: React.FC = () => {
                 ) : (
                   feeStructuresList.map((struct) => (
                     <tr key={struct.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: '14px 20px', fontWeight: 'bold', color: '#0f172a' }}>{struct.category}</td>
+                      <td style={{ padding: '14px 20px', fontWeight: 'bold', color: '#0f172a' }}>{struct.name || struct.category}</td>
                       <td style={{ padding: '14px 20px', color: '#334155' }}>{struct.academic_year} • {struct.term}</td>
                       <td style={{ padding: '14px 20px', fontWeight: '900', color: '#1e40af' }}>GHS {Number(struct.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                       <td style={{ padding: '14px 20px', color: '#64748b' }}>{struct.notes || '—'}</td>

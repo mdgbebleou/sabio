@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '@/services/supabase';
 import { useStudent } from '../src/context/StudentContext';
 
-// Global memory cache to persist insights across component remounts & app navigation (0 API waste on restart)
 const insightsCache: { [studentId: string]: string } = {};
 
 interface AIInsightsCardProps {
@@ -18,77 +16,82 @@ export const AIInsightsCard: React.FC<AIInsightsCardProps> = ({
   moduleName, 
   title = 'Intelligent AI Insights' 
 }) => {
-  const { selectedStudent } = useStudent();
+  const { selectedStudent, loadingStudents } = useStudent();
   const studentId = selectedStudent?.id || 'general';
 
   const [loading, setLoading] = useState(false);
   const [insights, setInsights] = useState<string>(() => {
-    // Check if we already have a cached insight for this student in memory
     return insightsCache[studentId] || '';
   });
 
   const fetchInsights = async (forceRefresh = false) => {
-    // If we already have a cached insight for this student and aren't forcing a refresh, do nothing (0 API calls!)
+    if (loadingStudents) return;
+
     if (!forceRefresh && insightsCache[studentId]) {
       setInsights(insightsCache[studentId]);
       return;
     }
 
+    // Expand timeout to 180 seconds (3 minutes) for local model stability
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 180000);
+
     try {
       setLoading(true);
 
-      const { data: { session } } = await supabase.auth.getSession();
-      const accessToken = session?.access_token;
+      const systemPrompt = `
+        You are an expert school advisor speaking directly to a parent on a school app dashboard. 
+        Provide a concise, warm, professional 1-2 sentence recommendation or tip encouraging them to check their child's progress, attendance, and fee status.
+        CRITICAL RULES: Do not list names, classes, scores, percentages, or financial balances. Do not use bullet points or introductory data lines. Start your response directly with the advice.
+      `;
 
-      if (!accessToken) {
-        setInsights('Please sign in to view AI-powered insights.');
-        return;
-      }
-
-      const studentPayload = selectedStudent ? {
-        name: `${selectedStudent.firstName} ${selectedStudent.lastName}`,
-        className: selectedStudent.className,
-        academicAverage: selectedStudent.academicAverage,
-        attendancePercentage: selectedStudent.attendancePercentage,
-        outstandingBalance: selectedStudent.outstandingBalance
-      } : null;
-
-      const response = await supabase.functions.invoke('generate-insights', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        body: { 
-          appType, 
-          moduleName,
-          studentContext: studentPayload
-        },
+      const response = await fetch('http://172.20.10.2:11434/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'phi3',
+          prompt: systemPrompt,
+          stream: false
+        }),
+        signal: controller.signal
       });
 
-      const { data, error } = response;
-      if (error) throw error;
+      clearTimeout(timeoutId);
 
-      if (data?.success && data?.insights) {
-        setInsights(data.insights);
-        // Save to memory cache
-        insightsCache[studentId] = data.insights;
-      } else {
-        setInsights(data?.error || 'No insights generated for this view yet.');
-      }
+      const result = await response.json();
+      let botReplyText = result?.response ? result.response.trim() : '';
+
+      const finalInsight = botReplyText && botReplyText.length > 10 && !botReplyText.toLowerCase().includes('student name:')
+        ? botReplyText 
+        : `Support your child's educational journey today by reviewing their latest attendance and staying connected with school updates.`;
+
+      setInsights(finalInsight);
+      insightsCache[studentId] = finalInsight;
+
     } catch (err: any) {
-      console.error('Failed to load AI insights:', err);
-      setInsights('AI intelligence layer currently offline.');
+      clearTimeout(timeoutId);
+      // Suppress annoying RedBox warning stack traces for expected aborts
+      let errorMsg = 'Local AI intelligence layer currently offline.';
+      if (err.name === 'AbortError') {
+        errorMsg = 'Model is warming up. Tap reload to try again.';
+      } else {
+        console.error('Failed to load local AI insights:', err);
+      }
+      setInsights(errorMsg);
     } finally {
       setLoading(false);
     }
   };
 
-  // Trigger only when student changes or if cache is completely empty
   useEffect(() => {
-    if (insightsCache[studentId]) {
-      setInsights(insightsCache[studentId]);
-    } else {
-      // First time loading this specific child, fetch once
-      void fetchInsights(false);
+    if (!loadingStudents && studentId) {
+      if (insightsCache[studentId]) {
+        setInsights(insightsCache[studentId]);
+      } else {
+        void fetchInsights(false);
+      }
     }
-  }, [studentId]);
+  }, [studentId, loadingStudents]);
 
   return (
     <View style={{ backgroundColor: '#f0f9ff', borderWidth: 1, borderColor: '#bae6fd', borderRadius: 16, padding: 16, marginVertical: 12 }}>
@@ -99,17 +102,17 @@ export const AIInsightsCard: React.FC<AIInsightsCardProps> = ({
         
         <TouchableOpacity 
           onPress={() => fetchInsights(true)}
-          disabled={loading}
+          disabled={loading || loadingStudents}
           style={{ padding: 4 }}
         >
           <Ionicons name="reload-outline" size={16} color="#0284c7" />
         </TouchableOpacity>
       </View>
 
-      {loading ? (
+      {loading || loadingStudents ? (
         <View style={{ padding: 12, alignItems: 'center' }}>
           <ActivityIndicator size="small" color="#0284c7" />
-          <Text style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Analyzing system data...</Text>
+          <Text style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Analyzing records...</Text>
         </View>
       ) : (
         <Text style={{ fontSize: 13, color: '#334155', lineHeight: 20 }}>

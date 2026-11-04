@@ -24,7 +24,7 @@ interface LinkedStudent {
   subjects: Array<{ name: string; score: number }>;
 }
 
-const ParentDashboard: React.FC = () => {
+export default function ParentDashboard() {
   const theme = useTheme();
   const router = useRouter();
   const { selectedStudent, setSelectedStudent, linkedStudents, setLinkedStudents, loadingStudents } = useStudent();
@@ -82,10 +82,12 @@ const ParentDashboard: React.FC = () => {
           setParentFirstName(capitalizedName);
         }
 
+        // Fetch non-message system notifications count for the top bell icon
         const { count: unreadNotifCount } = await supabase
           .from('notifications')
           .select('*', { count: 'exact', head: true })
           .eq('user_id', session.user.id)
+          .neq('type', 'message')
           .eq('is_read', false);
 
         if (isMounted) {
@@ -157,6 +159,27 @@ const ParentDashboard: React.FC = () => {
                 });
               }
 
+              // 3. Fetch actual unread chat/messages count via message_threads for this student/parent
+              const { data: threadData } = await supabase
+                .from('message_threads')
+                .select('id')
+                .eq('parent_id', session.user.id)
+                .eq('student_id', studentId);
+
+              let unreadMsgCount = 0;
+              if (threadData && threadData.length > 0) {
+                const threadIds = threadData.map(t => t.id);
+
+                const { count: msgCount } = await supabase
+                  .from('messages')
+                  .select('*', { count: 'exact', head: true })
+                  .in('thread_id', threadIds)
+                  .eq('is_read', false)
+                  .neq('sender_id', session.user.id);
+
+                unreadMsgCount = msgCount || 0;
+              }
+
               return {
                 id: studentId,
                 firstName: (st.first_name as string) || '',
@@ -169,7 +192,7 @@ const ParentDashboard: React.FC = () => {
                 outstandingBalance: studentOutstanding,
                 totalFees: studentTotalFees,
                 paidFees: studentPaidFees,
-                unreadMessagesCount: (st.unread_messages_count as number) || 0,
+                unreadMessagesCount: unreadMsgCount,
                 subjects: formattedSubjects,
               };
             })
@@ -263,7 +286,7 @@ const ParentDashboard: React.FC = () => {
         </TouchableOpacity>
 
         {/* PREDICTIVE QUICK-QUESTION CHIPS (PILLS) */}
-        <ScrollView horizontal showsHorizontalIndicator={false} style={{ marginBottom: 20, marginTop: -4 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20, marginTop: -4 }}>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {[
               "How are my child's grades?",
@@ -501,6 +524,4 @@ const ParentDashboard: React.FC = () => {
       </ScrollView>
     </ParentLayout>
   );
-};
-
-export default ParentDashboard;
+}

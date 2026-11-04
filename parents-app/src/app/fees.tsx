@@ -79,9 +79,12 @@ const FeesScreen: React.FC = () => {
             calculatedPaid += aPaid;
             calculatedOutstanding += bal;
 
+            // Prioritize specific fee name/title over general category
+            const specificFeeName = f.fee_name || f.name || f.title || f.category || 'School Fees';
+
             return {
               id: f.id,
-              name: f.category || 'School Fees',
+              name: specificFeeName,
               amount: tFees,
               status: f.status || 'Outstanding'
             };
@@ -199,7 +202,7 @@ const FeesScreen: React.FC = () => {
                       {selectedStudent.firstName} {selectedStudent.lastName}
                     </Text>
                     <Text style={{ fontSize: 11, color: theme.icon, marginTop: 2 }}>
-                      {selectedStudent.className} • Academic Year
+                      {selectedStudent.className} | Academic Year
                     </Text>
                   </View>
                 </View>
@@ -235,28 +238,18 @@ const FeesScreen: React.FC = () => {
                 </View>
               </View>
 
-              {/* PAYMENT REMINDER BANNER */}
-              {outstandingBalance > 0 && (
-                <View style={{ backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', borderRadius: 20, padding: 16, marginBottom: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <View style={{ flexDirection: 'row', gap: 12, flex: 1 }}>
-                    <Ionicons name="alert-circle" size={22} color="#c2410c" style={{ marginTop: 2 }} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#9a3412', lineHeight: 18 }}>
-                        Payment Reminder: GHS {outstandingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })} remains outstanding.
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              )}
+              {/* PAYMENT REMINDER BANNER - REMOVED */}
 
-              {/* MAKE PAYMENT ACTION BUTTON */}
+              {/* MAKE PAYMENT ACTION BUTTON - COMMENTED OUT */}
+              {/* 
               <TouchableOpacity 
                 onPress={() => router.push('/fees/payment' as any)}
                 style={{ backgroundColor: '#1e3a8a', paddingVertical: 16, borderRadius: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 2 }}
               >
                 <MaterialCommunityIcons name="wallet-outline" size={20} color="#ffffff" />
                 <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: 'bold' }}>Make Payment</Text>
-              </TouchableOpacity>
+              </TouchableOpacity> 
+              */}
 
               {/* FEE BREAKDOWN SECTION */}
               <Text style={{ fontSize: 18, fontWeight: '800', color: theme.text, marginBottom: 12 }}>Fee Breakdown</Text>
@@ -404,7 +397,7 @@ const FeesScreen: React.FC = () => {
                             <Text style={{ fontSize: 15, fontWeight: '800', color: theme.text }}>
                               {child.firstName} {child.lastName}
                             </Text>
-                            <Text style={{ fontSize: 11, color: theme.icon, marginTop: 2 }}>{child.className} • ID: {child.customId}</Text>
+                            <Text style={{ fontSize: 11, color: theme.icon, marginTop: 2 }}>{child.className} | ID: {child.customId}</Text>
                           </View>
                         </View>
 
@@ -453,3 +446,4 @@ const FeesScreen: React.FC = () => {
 };
 
 export default FeesScreen;
+
